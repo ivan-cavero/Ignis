@@ -1,128 +1,124 @@
 #!/bin/bash
-
-# init-ignis.sh - Initial setup for Ignis project on Debian 12
-
 set -e
 
-echo "🔧 Starting Ignis initial setup..."
+# === Colors ===
+GREEN="\033[1;32m"
+CYAN="\033[1;36m"
+YELLOW="\033[1;33m"
+RED="\033[1;31m"
+RESET="\033[0m"
 
-# 1. Update and upgrade system packages
-echo "📦 Updating system packages..."
-apt update && apt upgrade -y
+# === Variables ===
+ADMIN_USER="ignis"
+PROJECT_DIR="/home/$ADMIN_USER/Ignis"
+ENV_FILE="$PROJECT_DIR/.env"
+WEBHOOK_SERVICE="/etc/systemd/system/ignis-webhook.service"
 
-# 2. Install essential packages
-echo "📥 Installing essential packages..."
-apt install -y sudo curl git ufw fail2ban vim htop unzip gnupg ca-certificates lsb-release software-properties-common
-
-# 3. Create a new sudo user
-read -p "Enter the username for the new admin user: " ADMIN_USER
-adduser $ADMIN_USER
+echo -e "${CYAN}🔧 [1/9] Creating user and securing SSH...${RESET}"
+adduser --disabled-password --gecos "" $ADMIN_USER
 usermod -aG sudo $ADMIN_USER
-
-# 4. Set up SSH key authentication for the new user
-echo "🔐 Setting up SSH key authentication..."
 mkdir -p /home/$ADMIN_USER/.ssh
-
-if [ -f /root/.ssh/authorized_keys ]; then
-  echo "📋 Copying root authorized_keys to new user..."
-  cp /root/.ssh/authorized_keys /home/$ADMIN_USER/.ssh/
-else
-  echo "⚠️  No authorized_keys found in /root/.ssh/. Leaving new user's .ssh folder empty."
-  touch /home/$ADMIN_USER/.ssh/authorized_keys
-fi
-
+cp /root/.ssh/authorized_keys /home/$ADMIN_USER/.ssh/
 chown -R $ADMIN_USER:$ADMIN_USER /home/$ADMIN_USER/.ssh
 chmod 700 /home/$ADMIN_USER/.ssh
 chmod 600 /home/$ADMIN_USER/.ssh/authorized_keys
+sed -i 's/^#Port 22/Port 2222/' /etc/ssh/sshd_config
+sed -i 's/^PermitRootLogin yes/PermitRootLogin no/' /etc/ssh/sshd_config
+systemctl reload sshd
 
-# 5. Configure SSH daemon
-echo "🛡️ Configuring SSH daemon..."
-NEW_SSH_PORT=2222
-echo -e "Port $NEW_SSH_PORT\nPermitRootLogin no\nPasswordAuthentication no" > /etc/ssh/sshd_config.d/ignis.conf
-systemctl restart ssh
-
-# 6. Configure UFW firewall
-echo "🔥 Configuring UFW firewall..."
-ufw default deny incoming
-ufw default allow outgoing
-ufw allow $NEW_SSH_PORT/tcp
+echo -e "${CYAN}🛡️ [2/9] Configuring firewall and fail2ban...${RESET}"
+apt update -y
+apt install -y ufw fail2ban
+ufw allow 2222/tcp
 ufw allow http
 ufw allow https
 ufw --force enable
 
-# 7. Configure Fail2Ban
-echo "🚫 Configuring Fail2Ban..."
-cp /etc/fail2ban/jail.conf /etc/fail2ban/jail.local
-sed -i 's/^bantime  = .*$/bantime  = 1h/' /etc/fail2ban/jail.local
-sed -i 's/^findtime  = .*$/findtime  = 10m/' /etc/fail2ban/jail.local
-sed -i 's/^maxretry = .*$/maxretry = 5/' /etc/fail2ban/jail.local
-systemctl enable fail2ban
-systemctl restart fail2ban
+echo -e "${CYAN}🐳 [3/9] Installing Docker...${RESET}"
+apt install -y \
+  ca-certificates \
+  curl \
+  gnupg \
+  lsb-release \
+  unzip \
+  git \
+  software-properties-common
 
-# 8. Install Docker
-echo "🐳 Installing Docker..."
-curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
+install -m 0755 -d /etc/apt/keyrings
+curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+
 echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] \
+  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
   https://download.docker.com/linux/debian \
-  $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-apt update
-apt install -y docker-ce docker-ce-cli containerd.io
+  $(lsb_release -cs) stable" \
+  > /etc/apt/sources.list.d/docker.list
+
+apt update -y
+apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
 usermod -aG docker $ADMIN_USER
-systemctl enable docker
-systemctl start docker
 
-# 9. Install Docker Compose
-echo "🔧 Installing Docker Compose..."
-DOCKER_COMPOSE_VERSION="2.20.2"
-curl -L "https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-$(uname -s)-$(uname -m)" \
-  -o /usr/local/bin/docker-compose
-chmod +x /usr/local/bin/docker-compose
+echo -e "${CYAN}☕ [4/9] Installing Java, NVM, Node LTS...${RESET}"
+apt install -y openjdk-17-jre-headless
 
-# 10. Install Node Version Manager (NVM) and Node.js LTS
-echo "🟢 Installing NVM and Node.js LTS..."
-su - $ADMIN_USER -c "curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.3/install.sh | bash"
-su - $ADMIN_USER -c "source ~/.nvm/nvm.sh && nvm install --lts && nvm use --lts && nvm alias default 'lts/*'"
+su - $ADMIN_USER -c 'curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.3/install.sh | bash'
+echo 'export NVM_DIR="$HOME/.nvm"' >> /home/$ADMIN_USER/.bashrc
+echo '[ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"' >> /home/$ADMIN_USER/.bashrc
+su - $ADMIN_USER -c 'source ~/.bashrc && nvm install --lts && nvm use --lts && nvm alias default lts/*'
 
-# 11. Install Bun
-echo "🍞 Installing Bun..."
-su - $ADMIN_USER -c "curl -fsSL https://bun.sh/install | bash"
+echo -e "${CYAN}🍞 [5/9] Installing Bun...${RESET}"
+su - $ADMIN_USER -c 'curl -fsSL https://bun.sh/install | bash'
+ln -sf /home/$ADMIN_USER/.bun/bin/bun /usr/local/bin/bun
 
-# 12. Install OpenJDK 21 (LTS)
-echo "☕ Installing OpenJDK 21..."
-apt install -y openjdk-21-jdk
+echo -e "${CYAN}🔐 [6/9] Setting file and folder permissions...${RESET}"
+# Project-wide permissions
+chown -R $ADMIN_USER:$ADMIN_USER $PROJECT_DIR
 
-# 13. Install Git
-echo "🐙 Installing Git..."
-apt install -y git
+# Executable scripts
+chmod +x $PROJECT_DIR/scripts/*.sh
+chmod +x $PROJECT_DIR/scripts/webhook-server.ts
 
-# 15. Setting up webhook
-echo "🧰 Setting up webhook auto-deployment..."
-cp ./ignis-webhook.service /etc/systemd/system/
+# Secure files
+chmod 600 $PROJECT_DIR/proxy/acme.json
+chmod 644 $PROJECT_DIR/proxy/traefik.yml
+chmod 644 $PROJECT_DIR/proxy/dynamic/*.yml
 
+# Docker Compose
+chmod 644 $PROJECT_DIR/docker-compose.yml
+
+echo -e "${CYAN}🧰 [7/9] Creating and enabling systemd webhook service...${RESET}"
+cp $PROJECT_DIR/ignis-webhook.service $WEBHOOK_SERVICE
+systemctl daemon-reexec
 systemctl daemon-reload
 systemctl enable ignis-webhook.service
 systemctl start ignis-webhook.service
 
-# 13. Final verification
-echo "✅ Verifying installations..."
+echo -e "${CYAN}🐋 [8/9] Starting Docker containers...${RESET}"
+cd $PROJECT_DIR
+docker compose up -d
 
-echo "Docker version:"
-docker --version
+echo -e "${CYAN}📋 [9/9] Verifying services...${RESET}"
 
-echo "Docker Compose version:"
-docker-compose --version
+# Docker containers
+docker_status=$(docker ps --format "{{.Names}}" | grep -E 'traefik|backend|admin|user')
+if [ -n "$docker_status" ]; then
+  echo -e "${GREEN}✔ Docker containers running:${RESET}"
+  echo "$docker_status"
+else
+  echo -e "${RED}✖ Docker containers are not running properly${RESET}"
+fi
 
-echo "Node.js version:"
-su - $ADMIN_USER -c "source ~/.nvm/nvm.sh && node -v"
+# Systemd service
+if systemctl is-active --quiet ignis-webhook.service; then
+  echo -e "${GREEN}✔ Webhook service is active and running${RESET}"
+else
+  echo -e "${RED}✖ Webhook service is not running${RESET}"
+fi
 
-echo "Bun version:"
-su - $ADMIN_USER -c "~/.bun/bin/bun -v"
+# Bun version
+echo -e "${GREEN}✔ Bun version:$(bun --version)${RESET}"
 
-echo "Java version:"
-java -version
+# Node version
+su - $ADMIN_USER -c 'source ~/.bashrc && node -v && npm -v'
 
-echo "SSH is now configured to use port $NEW_SSH_PORT."
-echo "Please ensure your firewall allows connections on this port."
-
-echo "🎉 Ignis initial setup completed successfully!"
+echo -e "\n${YELLOW}⚠️ Reminder:${RESET} Ensure .env exists with WEBHOOK_SECRET and certs at /etc/letsencrypt/live/"
+echo -e "${GREEN}✅ Setup complete. Your Ignis deployment is ready!${RESET}"
