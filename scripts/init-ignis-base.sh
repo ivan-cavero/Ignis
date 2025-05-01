@@ -10,7 +10,7 @@ RESET="\033[0m"
 
 ADMIN_USER="ignis"
 PROJECT_NAME="Ignis"
-REPO_URL="git@github.com:youruser/yourrepo.git"
+REPO_URL="https://github.com/ivan-cavero/Ignis"
 PROJECT_DIR="/home/$ADMIN_USER/$PROJECT_NAME"
 
 if [ "$EUID" -ne 0 ]; then
@@ -24,7 +24,7 @@ echo -e "${CYAN}🔧 [1/4] Creating user '$ADMIN_USER'...${RESET}"
 if id "$ADMIN_USER" &>/dev/null; then
   echo -e "${YELLOW}⚠️ User '$ADMIN_USER' already exists. Skipping creation.${RESET}"
 else
-  adduser --disabled-password --gecos "" $ADMIN_USER
+  adduser $ADMIN_USER
   usermod -aG sudo $ADMIN_USER
   echo -e "${GREEN}✔ User '$ADMIN_USER' created and added to sudo group.${RESET}"
 fi
@@ -39,6 +39,13 @@ chmod 600 /home/$ADMIN_USER/.ssh/authorized_keys
 chown -R $ADMIN_USER:$ADMIN_USER /home/$ADMIN_USER/.ssh
 
 echo -e "${CYAN}📦 [3/4] Cloning project repository...${RESET}"
+
+if ! command -v git &>/dev/null; then
+  echo -e "${YELLOW}🔍 Git is not installed. Installing Git...${RESET}"
+  apt update -y
+  apt install -y git
+  echo -e "${GREEN}✔️ Git installed.${RESET}"
+fi
 
 # Clone repository if not already present
 if [ -d "$PROJECT_DIR" ]; then
