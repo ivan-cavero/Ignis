@@ -92,6 +92,18 @@ su - $ADMIN_USER -c "curl -fsSL https://bun.sh/install | bash"
 echo "☕ Installing OpenJDK 21..."
 apt install -y openjdk-21-jdk
 
+# 13. Install Git
+echo "🐙 Installing Git..."
+apt install -y git
+
+# 15. Setting up webhook
+echo "🧰 Setting up webhook auto-deployment..."
+cp ./ignis-webhook.service /etc/systemd/system/
+
+systemctl daemon-reload
+systemctl enable ignis-webhook.service
+systemctl start ignis-webhook.service
+
 # 13. Final verification
 echo "✅ Verifying installations..."
 
