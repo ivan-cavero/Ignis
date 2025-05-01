@@ -1,0 +1,12 @@
+[Unit]
+Description=Ignis GitHub Webhook Listener
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/bun run /home/ignis/Ignis/scripts/webhook-server.ts
+WorkingDirectory=/home/ignis/Ignis
+Restart=always
+User=ignis
+
+[Install]
+WantedBy=multi-user.target

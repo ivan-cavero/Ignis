@@ -25,6 +25,9 @@ chmod 644 "$BASE_DIR/proxy/dynamic/dynamic.yml"
 echo "🔐 Ensuring scripts are executable and not writable by others"
 chmod -R 750 "$BASE_DIR/scripts"
 
+chmod +x "$BASE_DIR/scripts/deploy.sh"
+chmod +x "$BASE_DIR/scripts/webhook-handler.sh"
+
 # 4. Optional: secure deployments folder
 echo "🔐 Locking down deployment configurations"
 chmod -R 750 "$BASE_DIR/deployments"
