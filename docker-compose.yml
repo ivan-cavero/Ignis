@@ -1,0 +1,76 @@
+version: '3.8'
+
+services:
+  traefik:
+    image: traefik:v2.10
+    container_name: traefik
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+      - "8080:8080"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./proxy/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./proxy/dynamic:/etc/traefik/dynamic:ro
+      - ./proxy/acme.json:/etc/traefik/acme.json
+    networks:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+
+      # HTTPS router for dashbord with auth
+      - "traefik.http.routers.traefik.rule=Host(`traefik.ivancavero.com`)"
+      - "traefik.http.routers.traefik.entrypoints=websecure"
+      - "traefik.http.routers.traefik.tls.certresolver=letsencrypt"
+      - "traefik.http.routers.traefik.middlewares=auth@file"
+      - "traefik.http.routers.traefik.service=api@internal"
+
+      # HTTP redirecto to HTTPS
+      - "traefik.http.routers.http-catch.rule=HostRegexp(`{host:.+}`)"
+      - "traefik.http.routers.http-catch.entrypoints=web"
+      - "traefik.http.routers.http-catch.middlewares=redirect-to-https@file"
+      - "traefik.http.routers.http-catch.service=noop@internal"
+
+  backend:
+    build: ./backend
+    container_name: ignis-backend
+    restart: always
+    networks:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.backend.rule=Host(`api.ivancavero.com`)"
+      - "traefik.http.routers.backend.entrypoints=websecure"
+      - "traefik.http.routers.backend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.backend.loadbalancer.server.port=3000"
+
+  user-frontend:
+    build: ./frontend/user
+    container_name: ignis-user-frontend
+    restart: always
+    networks:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.user.rule=Host(`app.ivancavero.com`)"
+      - "traefik.http.routers.user.entrypoints=websecure"
+      - "traefik.http.routers.user.tls.certresolver=letsencrypt"
+      - "traefik.http.services.user.loadbalancer.server.port=80"
+
+  admin-frontend:
+    build: ./frontend/admin
+    container_name: ignis-admin-frontend
+    restart: always
+    networks:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.admin.rule=Host(`admin.ivancavero.com`)"
+      - "traefik.http.routers.admin.entrypoints=websecure"
+      - "traefik.http.routers.admin.tls.certresolver=letsencrypt"
+      - "traefik.http.services.admin.loadbalancer.server.port=80"
+
+networks:
+  traefik:
+    driver: bridge

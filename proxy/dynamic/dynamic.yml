@@ -1,0 +1,10 @@
+http:
+  middlewares:
+    redirect-to-https:
+        redirectScheme:
+          scheme: https
+    auth:
+      basicAuth:
+        users:
+          - "admin:$2y$05$wgNzUxFgINRM2MzWzO/o5.UxHYytvFHo923WxGCsIPFPcvqGHqWZa"
+# Generate pass with apt install apache2-utils -y and htpasswd -nbB admin admin
