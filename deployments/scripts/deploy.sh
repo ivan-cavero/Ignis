@@ -1,9 +1,9 @@
 #!/bin/bash
-# Ignis Infrastructure Deployment Script
-# This script manages the Ignis infrastructure deployment
+# Ignis Unified Deployment Script
+# This script handles all deployment operations for the Ignis system
 # 
 # Author: v0
-# Version: 1.3.0
+# Version: 2.0.0
 # License: MIT
 
 # Exit on any error
@@ -19,18 +19,16 @@ readonly COLOR_ERROR="\033[1;31m"   # Red
 
 # Default settings
 readonly PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-readonly LOG_DIR="$PROJECT_ROOT/logs/infrastructure"
+readonly LOG_DIR="$PROJECT_ROOT/logs/deployments"
 readonly LOG_FILE="$LOG_DIR/deploy-$(date +%Y%m%d-%H%M%S).log"
-readonly WEBHOOK_SERVICE="/etc/systemd/system/ignis-webhook.service"
 
 # Feature flags (can be overridden by command line arguments)
-DEPLOY_INFRASTRUCTURE=true
-SETUP_WEBHOOK=true
 FORCE_REBUILD=false
 LOG_TO_FILE=true
 COMPONENT=""
 ENVIRONMENT="production"
 BRANCH="main"
+EXTRACT_CERTS=true
 
 # Domain configuration
 readonly DOMAIN_CONFIG=(
@@ -39,6 +37,7 @@ readonly DOMAIN_CONFIG=(
   "admin-frontend:admin.ivancavero.com:dev-admin.ivancavero.com"
   "user-frontend:app.ivancavero.com:dev-app.ivancavero.com"
   "landing-frontend:ivancavero.com:dev.ivancavero.com"
+  "webhook:vps.ivancavero.com:vps.ivancavero.com"
 )
 
 # ==================== UTILITY FUNCTIONS ====================
@@ -66,11 +65,6 @@ log() {
 # Pure function to check if a command exists
 command_exists() {
   command -v "$1" >/dev/null 2>&1
-}
-
-# Pure function to check if a service is active
-is_service_active() {
-  systemctl is-active --quiet "$1"
 }
 
 # Pure function to check if a file exists
@@ -122,17 +116,14 @@ parse_arguments() {
       --branch=*)
         BRANCH="${1#*=}"
         ;;
-      --no-infrastructure)
-        DEPLOY_INFRASTRUCTURE=false
-        ;;
-      --no-webhook)
-        SETUP_WEBHOOK=false
-        ;;
       --force-rebuild)
         FORCE_REBUILD=true
         ;;
       --no-log)
         LOG_TO_FILE=false
+        ;;
+      --no-extract-certs)
+        EXTRACT_CERTS=false
         ;;
       --help)
         show_help
@@ -166,18 +157,17 @@ parse_arguments() {
 # Function to show help
 show_help() {
   cat << EOF
-Ignis Infrastructure Deployment Script
+Ignis Unified Deployment Script
 
 Usage: $0 [options]
 
 Options:
-  --component=NAME      Deploy specific component (backend, admin-frontend, user-frontend, landing-frontend, proxy, infrastructure)
+  --component=NAME      Deploy specific component (backend, admin-frontend, user-frontend, landing-frontend, proxy, webhook, infrastructure)
   --environment=ENV     Set deployment environment (production, development)
   --branch=BRANCH       Set Git branch to deploy (main, dev)
-  --no-infrastructure   Skip deploying Docker infrastructure
-  --no-webhook          Skip setting up the webhook service
   --force-rebuild       Force rebuild of all containers
   --no-log              Don't write logs to file
+  --no-extract-certs    Skip certificate extraction
   --help                Show this help message
 
 Examples:
@@ -193,7 +183,7 @@ EOF
 initialize_log_file() {
   if [ "$LOG_TO_FILE" = true ]; then
     mkdir -p "$LOG_DIR"
-    echo "=== IGNIS INFRASTRUCTURE DEPLOYMENT LOG - $(date) ===" > "$LOG_FILE"
+    echo "=== IGNIS DEPLOYMENT LOG - $(date) ===" > "$LOG_FILE"
     log "INFO" "Logging to file: $LOG_FILE"
   fi
 }
@@ -272,6 +262,29 @@ update_environment_variables() {
   log "SUCCESS" "Environment variables updated for $env environment"
 }
 
+# Extract certificates from acme.json
+extract_certificates() {
+  if [ "$EXTRACT_CERTS" != true ]; then
+    log "INFO" "Skipping certificate extraction (--no-extract-certs flag provided)"
+    return 0
+  fi
+  
+  log "INFO" "Extracting certificates from acme.json"
+  
+  # Check if extract-certs.sh exists
+  local extract_script="$PROJECT_ROOT/deployments/scripts/extract-certs.sh"
+  
+  if [ ! -f "$extract_script" ]; then
+    log "ERROR" "Certificate extraction script not found at $extract_script"
+    return 1
+  fi
+  
+  # Run the extraction script
+  bash "$extract_script"
+  
+  return 0
+}
+
 # Deploy full infrastructure
 deploy_full_infrastructure() {
   local env="$1"
@@ -310,7 +323,7 @@ deploy_full_infrastructure() {
   if [ "$env" = "development" ]; then
     env_file="docker-compose.development.yml"
   else
-    env_file="docker-compose.yml"
+    env_file="docker-compose.production.yml"
   fi
   
   # Deploy with or without rebuild
@@ -333,7 +346,7 @@ deploy_full_infrastructure() {
   fi
   
   # Check if containers are running
-  local containers=("traefik" "ignis-backend" "ignis-admin-frontend" "ignis-user-frontend" "ignis-landing")
+  local containers=("traefik" "ignis-backend" "ignis-admin-frontend" "ignis-user-frontend" "ignis-landing" "ignis-webhook")
   local failed_containers=()
   
   for container in "${containers[@]}"; do
@@ -391,7 +404,7 @@ deploy_component() {
   if [ "$env" = "development" ]; then
     env_file="docker-compose.development.yml"
   else
-    env_file="docker-compose.yml"
+    env_file="docker-compose.production.yml"
   fi
   
   # Deploy based on component type
@@ -441,6 +454,15 @@ deploy_component() {
       fi
       ;;
       
+    "webhook")
+      log "INFO" "Deploying webhook server"
+      if [ -f "$PROJECT_ROOT/$env_file" ]; then
+        docker compose -f "$compose_file" -f "$env_file" up -d --build webhook
+      else
+        docker compose -f "$compose_file" up -d --build webhook
+      fi
+      ;;
+      
     "infrastructure")
       log "INFO" "Deploying full infrastructure"
       deploy_full_infrastructure "$env"
@@ -461,6 +483,7 @@ deploy_component() {
     "user-frontend") container_name="ignis-user-frontend" ;;
     "landing-frontend") container_name="ignis-landing" ;;
     "proxy") container_name="traefik" ;;
+    "webhook") container_name="ignis-webhook" ;;
   esac
   
   if [ -n "$container_name" ] && is_container_running "$container_name"; then
@@ -472,53 +495,11 @@ deploy_component() {
   fi
 }
 
-# Set up webhook service
-setup_webhook_service() {
-  if [ "$SETUP_WEBHOOK" != true ]; then
-    log "INFO" "Skipping webhook setup (--no-webhook flag provided)"
-    return 0
-  fi
-  
-  log "INFO" "Setting up webhook service"
-  
-  # Find webhook service file
-  local service_file=""
-  
-  if [ -f "$PROJECT_ROOT/deployments/service/ignis-webhook.service" ]; then
-    service_file="$PROJECT_ROOT/deployments/service/ignis-webhook.service"
-  else
-    log "ERROR" "Webhook service file not found"
-    return 1
-  fi
-  
-  # Install service file
-  log "INFO" "Installing webhook service from $service_file"
-  sudo cp "$service_file" "$WEBHOOK_SERVICE"
-  
-  # Reload systemd
-  sudo systemctl daemon-reload
-  
-  # Enable and start the service
-  sudo systemctl enable ignis-webhook.service
-  sudo systemctl restart ignis-webhook.service
-  
-  # Check if service is running
-  if is_service_active "ignis-webhook"; then
-    log "SUCCESS" "Webhook service started successfully"
-    return 0
-  else
-    log "ERROR" "Failed to start webhook service"
-    log "INFO" "Checking service logs"
-    sudo journalctl -u ignis-webhook --no-pager -n 20
-    return 1
-  fi
-}
-
 # Generate system summary
 generate_summary() {
   log "INFO" "Generating system summary"
   
-  echo -e "${COLOR_INFO}=== IGNIS INFRASTRUCTURE SUMMARY ===${COLOR_RESET}"
+  echo -e "${COLOR_INFO}=== IGNIS DEPLOYMENT SUMMARY ===${COLOR_RESET}"
   
   # Environment info
   echo -e "${COLOR_INFO}Environment:${COLOR_RESET}"
@@ -529,9 +510,23 @@ generate_summary() {
   echo -e "${COLOR_INFO}Docker Containers:${COLOR_RESET}"
   docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep "ignis\|traefik"
   
-  # Webhook service status
-  echo -e "${COLOR_INFO}Webhook Service:${COLOR_RESET}"
-  systemctl status ignis-webhook --no-pager | head -n 3
+  # Certificate status
+  echo -e "${COLOR_INFO}Certificate Status:${COLOR_RESET}"
+  
+  # Check for certificates in the certs directory
+  local cert_dir="$PROJECT_ROOT/proxy/certs"
+  if [ -d "$cert_dir" ]; then
+    echo -e "  Available certificates:"
+    for cert in "$cert_dir"/*.crt; do
+      if [ -f "$cert" ]; then
+        local domain=$(basename "$cert" .crt)
+        local expiry=$(openssl x509 -enddate -noout -in "$cert" | cut -d= -f2)
+        echo -e "    - $domain (expires: $expiry)"
+      fi
+    done
+  else
+    echo -e "  No certificates found"
+  fi
   
   # Domain information
   echo -e "${COLOR_INFO}Domain Configuration:${COLOR_RESET}"
@@ -550,7 +545,7 @@ generate_summary() {
   # Next steps
   echo -e "${COLOR_WARNING}Next Steps:${COLOR_RESET}"
   echo -e "  1. Configure your GitHub repository to send webhooks to:"
-  echo -e "     https://your-server:3333/webhook"
+  echo -e "     https://vps.ivancavero.com:3333/webhook"
   echo -e "  2. Set the webhook secret in your GitHub repository settings"
   echo -e "  3. Push changes to your repository to trigger deployments"
   
@@ -559,7 +554,7 @@ generate_summary() {
 
 # ==================== MAIN FUNCTION ====================
 main() {
-  log "INFO" "Starting Ignis infrastructure deployment"
+  log "INFO" "Starting Ignis deployment"
   
   # Parse command line arguments
   parse_arguments "$@"
@@ -574,32 +569,22 @@ main() {
   fi
   
   # Deploy infrastructure or specific component
-  if [ "$DEPLOY_INFRASTRUCTURE" = true ]; then
-    if [ -n "$COMPONENT" ]; then
-      # Deploy specific component
-      if ! deploy_component "$COMPONENT" "$ENVIRONMENT" "$BRANCH"; then
-        log "ERROR" "Component deployment failed"
-        exit 1
-      fi
-    else
-      # Deploy full infrastructure
-      if ! deploy_full_infrastructure "$ENVIRONMENT"; then
-        log "WARNING" "Infrastructure deployment had issues"
-        # Continue anyway, as partial deployments might still work
-      fi
-    fi
-  else
-    log "INFO" "Skipping infrastructure deployment (--no-infrastructure flag provided)"
-  fi
-  
-  # Set up webhook service
-  if [ "$SETUP_WEBHOOK" = true ]; then
-    if ! setup_webhook_service; then
-      log "ERROR" "Webhook service setup failed"
-      # This is critical, so exit with error
+  if [ -n "$COMPONENT" ]; then
+    # Deploy specific component
+    if ! deploy_component "$COMPONENT" "$ENVIRONMENT" "$BRANCH"; then
+      log "ERROR" "Component deployment failed"
       exit 1
     fi
+  else
+    # Deploy full infrastructure
+    if ! deploy_full_infrastructure "$ENVIRONMENT"; then
+      log "WARNING" "Infrastructure deployment had issues"
+      # Continue anyway, as partial deployments might still work
+    fi
   fi
+  
+  # Extract certificates from acme.json
+  extract_certificates
   
   # Generate summary
   generate_summary
