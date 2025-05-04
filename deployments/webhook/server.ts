@@ -1,23 +1,22 @@
 /**
  * Ignis Deployment Webhook Server
  *
- * This server listens for GitHub webhook events and triggers selective deployments
- * based on which components have changed. It supports multiple environments (main/dev)
- * and provides detailed logging.
+ * This server listens for GitHub webhook events and triggers deployments
+ * based on component changes. It supports multiple environments and provides
+ * detailed logging with a functional approach.
  */
 import { createHmac, timingSafeEqual } from "crypto"
 import { existsSync, mkdirSync, appendFileSync } from "fs"
 import { join } from "path"
-import { spawn } from "child_process"
+import { exec } from "child_process"
 
 // Configuration constants
 const CONFIG = {
   PORT: 3333,
   WEBHOOK_PATH: "/webhook",
   ENV_FILE: ".env",
-  CERT_DIR: join(import.meta.dir, "../../proxy/certs"),
-  LOGS_DIR: join(import.meta.dir, "../../logs/webhook"),
-  DEPLOYMENT_SCRIPT: join(import.meta.dir, "../scripts/deploy-component.sh"),
+  LOGS_DIR: join(process.cwd(), "logs/webhook"),
+  PROJECT_ROOT: process.cwd(),
 }
 
 // Ensure logs directory exists
@@ -26,28 +25,35 @@ if (!existsSync(CONFIG.LOGS_DIR)) {
 }
 
 /**
- * Logger utility for consistent log formatting
+ * Pure function to create a logger with consistent formatting
+ * @returns Object with logging functions
  */
-const logger = {
-  info: (message: string) => console.log(`[INFO] ${message}`),
-  success: (message: string) => console.log(`[SUCCESS] ${message}`),
-  warn: (message: string) => console.warn(`[WARNING] ${message}`),
-  error: (message: string) => console.error(`[ERROR] ${message}`),
+const createLogger = () => ({
+  info: (message) => console.log(`[INFO] ${message}`),
+  success: (message) => console.log(`[SUCCESS] ${message}`),
+  warn: (message) => console.warn(`[WARNING] ${message}`),
+  error: (message) => console.error(`[ERROR] ${message}`),
 
-  // Log to file with timestamp
-  logToFile: (message: string, level = "INFO") => {
+  // Pure function to log to file with timestamp
+  logToFile: (message, level = "INFO") => {
     const timestamp = new Date().toISOString()
     const logFile = join(CONFIG.LOGS_DIR, `webhook-${new Date().toISOString().split("T")[0]}.log`)
     const logMessage = `[${timestamp}] [${level}] ${message}\n`
 
     appendFileSync(logFile, logMessage)
+    return message
   },
-}
+})
+
+const logger = createLogger()
 
 /**
- * Verifies the GitHub webhook signature against the request body
+ * Pure function to verify the GitHub webhook signature against the request body
+ * @param body - The raw request body
+ * @param signature - The signature from GitHub
+ * @returns Boolean indicating if signature is valid
  */
-const verifySignature = (body: string, signature: string): boolean => {
+const verifySignature = (body, signature) => {
   const secret = process.env.WEBHOOK_SECRET ?? ""
 
   if (!secret) {
@@ -69,14 +75,19 @@ const verifySignature = (body: string, signature: string): boolean => {
 }
 
 /**
- * Creates a response object with the given status and message
+ * Pure function to create a response object
+ * @param message - Response message
+ * @param status - HTTP status code
+ * @returns Response object
  */
-const createResponse = (message: string, status: number): Response => new Response(message, { status })
+const createResponse = (message, status) => new Response(message, { status })
 
 /**
- * Determines which components have changed based on the modified files
+ * Pure function to determine which components have changed based on modified files
+ * @param files - Array of modified file paths
+ * @returns Array of component names that have changed
  */
-const getChangedComponents = (files: string[]): string[] => {
+const getChangedComponents = (files) => {
   const componentPaths = {
     backend: ["backend/"],
     "admin-frontend": ["frontend/admin/"],
@@ -92,9 +103,50 @@ const getChangedComponents = (files: string[]): string[] => {
 }
 
 /**
- * Handles webhook requests by validating and triggering deployments
+ * Pure function to execute a shell command
+ * @param command - Command to execute
+ * @returns Promise that resolves when command completes
  */
-const handleWebhook = async (req: Request): Promise<Response> => {
+const executeCommand = (command) => 
+  new Promise((resolve, reject) => {
+    exec(command, (error, stdout, stderr) => {
+      if (error) {
+        logger.error(`Command execution error: ${error.message}`)
+        logger.logToFile(`Command execution error: ${error.message}`, "ERROR")
+        reject(error)
+        return
+      }
+      
+      if (stderr) {
+        logger.warn(`Command stderr: ${stderr}`)
+        logger.logToFile(`Command stderr: ${stderr}`, "WARNING")
+      }
+      
+      logger.info(`Command stdout: ${stdout}`)
+      logger.logToFile(`Command stdout: ${stdout}`, "INFO")
+      resolve(stdout)
+    })
+  })
+
+/**
+ * Pure function to deploy a component
+ * @param component - Component name to deploy
+ * @param environment - Environment to deploy to
+ * @param branch - Git branch to deploy
+ * @returns Promise that resolves when deployment completes
+ */
+const deployComponent = (component, environment, branch) => {
+  const command = `cd ${CONFIG.PROJECT_ROOT} && bash deployments/scripts/deploy-infrastructure.sh --component=${component} --environment=${environment} --branch=${branch}`
+  logger.info(`Executing: ${command}`)
+  return executeCommand(command)
+}
+
+/**
+ * Handles webhook requests by validating and triggering deployments
+ * @param req - Request object
+ * @returns Response object
+ */
+const handleWebhook = async (req) => {
   const url = new URL(req.url)
 
   // Early return for invalid requests
@@ -127,12 +179,11 @@ const handleWebhook = async (req: Request): Promise<Response> => {
     // Extract repository and branch information
     const repo = payload.repository?.name ?? "unknown"
     const branch = payload.ref?.replace("refs/heads/", "") ?? "unknown"
-    const files =
-      payload.commits?.flatMap((commit: any) => [
-        ...(commit.added || []),
-        ...(commit.modified || []),
-        ...(commit.removed || []),
-      ]) || []
+    const files = payload.commits?.flatMap((commit) => [
+      ...(commit.added || []),
+      ...(commit.modified || []),
+      ...(commit.removed || []),
+    ]) || []
 
     // Determine environment based on branch
     const environment = branch === "main" ? "production" : branch === "dev" ? "development" : null
@@ -156,12 +207,14 @@ const handleWebhook = async (req: Request): Promise<Response> => {
     logger.info(`Changed components: ${changedComponents.join(", ")}`)
     logger.logToFile(`Deploying components ${changedComponents.join(", ")} to ${environment}`, "INFO")
 
-    // Trigger deployment for each changed component
-    changedComponents.forEach((component) => {
-      spawn("bash", [CONFIG.DEPLOYMENT_SCRIPT, component, environment, branch], {
-        stdio: "inherit",
-        env: { ...process.env },
-      })
+    // Deploy each changed component using Promise.all for parallel execution
+    Promise.all(
+      changedComponents.map((component) => 
+        deployComponent(component, environment, branch)
+      )
+    ).catch((error) => {
+      logger.error(`Deployment error: ${error}`)
+      logger.logToFile(`Deployment error: ${error}`, "ERROR")
     })
 
     return createResponse(`Deployment triggered for ${changedComponents.join(", ")} in ${environment} environment`, 200)
@@ -173,23 +226,13 @@ const handleWebhook = async (req: Request): Promise<Response> => {
 }
 
 /**
- * Validates if the required environment variables and files exist
+ * Pure function to validate if required environment variables exist
+ * @returns Boolean indicating if all requirements are met
  */
-const validateRequirements = (): boolean => {
-  const checks = [{ condition: !!process.env.WEBHOOK_SECRET, message: "WEBHOOK_SECRET environment variable" }]
-
-  // Check for TLS certificates
-  const domains = ["vps.ivancavero.com", "api.ivancavero.com", "admin.ivancavero.com", "app.ivancavero.com"]
-
-  domains.forEach((domain) => {
-    const certPath = join(CONFIG.CERT_DIR, `${domain}.crt`)
-    const keyPath = join(CONFIG.CERT_DIR, `${domain}.key`)
-
-    if (existsSync(certPath) && existsSync(keyPath)) {
-      // At least one domain has valid certificates
-      checks.push({ condition: true, message: "TLS certificates" })
-    }
-  })
+const validateRequirements = () => {
+  const checks = [
+    { condition: !!process.env.WEBHOOK_SECRET, message: "WEBHOOK_SECRET environment variable" }
+  ]
 
   const failedChecks = checks.filter((check) => !check.condition)
 
@@ -205,39 +248,34 @@ const validateRequirements = (): boolean => {
 /**
  * Starts the webhook server
  */
-const startServer = (): void => {
+const startServer = async () => {
   if (!validateRequirements()) {
     logger.error("Server startup aborted due to missing requirements")
     process.exit(1)
   }
 
-  // Find available TLS certificates
-  const domain = "vps.ivancavero.com"
-  const certPath = join(CONFIG.CERT_DIR, `${domain}.crt`)
-  const keyPath = join(CONFIG.CERT_DIR, `${domain}.key`)
+  try {
+    // Dynamically import Bun
+    const { default: Bun } = await import("bun")
 
-  const serverConfig = {
-    hostname: "0.0.0.0",
-    port: CONFIG.PORT,
-    tls:
-      existsSync(certPath) && existsSync(keyPath)
-        ? {
-            cert: Bun.file(certPath),
-            key: Bun.file(keyPath),
-          }
-        : undefined,
-    fetch: handleWebhook,
+    const serverConfig = {
+      hostname: "0.0.0.0",
+      port: CONFIG.PORT,
+      fetch: handleWebhook,
+    }
+
+    Bun.serve(serverConfig)
+
+    logger.success(`Webhook server running at http://0.0.0.0:${CONFIG.PORT}${CONFIG.WEBHOOK_PATH}`)
+    logger.logToFile(`Webhook server started on port ${CONFIG.PORT}`, "INFO")
+  } catch (error) {
+    logger.error(`Failed to start server: ${error}`)
+    process.exit(1)
   }
-
-  // Bun.serve(serverConfig)
-  import("bun").then((bun) => {
-    bun.serve(serverConfig)
-  })
-
-  const protocol = serverConfig.tls ? "https" : "http"
-  logger.success(`Webhook server running at ${protocol}://0.0.0.0:${CONFIG.PORT}${CONFIG.WEBHOOK_PATH}`)
-  logger.logToFile(`Webhook server started on port ${CONFIG.PORT}`, "INFO")
 }
 
 // Start the server
-startServer()
+startServer().catch((error) => {
+  logger.error(`Unhandled error: ${error}`)
+  process.exit(1)
+})

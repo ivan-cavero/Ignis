@@ -4,7 +4,7 @@ services:
     container_name: traefik
     restart: always
     environment:
-      - NODE_ENV=production
+      - NODE_ENV=development
     ports:
       - "80:80"
       - "443:443"
@@ -37,7 +37,7 @@ services:
     container_name: ignis-backend
     restart: always
     environment:
-      - NODE_ENV=production
+      - NODE_ENV=development
     networks:
       - traefik
     labels:
@@ -52,7 +52,7 @@ services:
     container_name: ignis-user-frontend
     restart: always
     environment:
-      - NODE_ENV=production
+      - NODE_ENV=development
     networks:
       - traefik
     labels:
@@ -67,7 +67,7 @@ services:
     container_name: ignis-admin-frontend
     restart: always
     environment:
-      - NODE_ENV=production
+      - NODE_ENV=development
     networks:
       - traefik
     labels:
@@ -82,7 +82,7 @@ services:
     container_name: ignis-landing
     restart: always
     environment:
-      - NODE_ENV=production
+      - NODE_ENV=development
     networks:
       - traefik
     labels:
