@@ -1,0 +1,15 @@
+[Unit]
+Description=Ignis GitHub Webhook Listener
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/bun run /opt/ignis/deployments/webhook/server.ts
+WorkingDirectory=/opt/ignis
+Restart=always
+User=ignis
+Environment=NODE_ENV=production
+# Load environment variables from .env file
+EnvironmentFile=/opt/ignis/.env
+
+[Install]
+WantedBy=multi-user.target
