@@ -38,6 +38,33 @@ log() {
   echo -e "${color}[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $message${COLOR_RESET}" | tee -a "$LOG_FILE"
 }
 
+# Add this new helper function above the main function:
+process_certificate() {
+  local cert64="$1"
+  
+  cert_json=$(echo "$cert64" | base64 -d)
+  domain=$(echo "$cert_json" | jq -r '.domain.main')
+  cert_pem=$(echo "$cert_json" | jq -r '.certificate' | base64 -d)
+  key_pem=$(echo "$cert_json" | jq -r '.key' | base64 -d)
+  
+  if [ -z "$domain" ] || [ -z "$cert_pem" ] || [ -z "$key_pem" ] || [ "$domain" = "null" ]; then
+    log "WARNING" "Skipping invalid or incomplete cert block"
+    return
+  fi
+  
+  CERT_PATH="$CERT_DIR/$domain.crt"
+  KEY_PATH="$CERT_DIR/$domain.key"
+  
+  echo "$cert_pem" > "$CERT_PATH"
+  echo "$key_pem" > "$KEY_PATH"
+  
+  # Set proper permissions
+  chmod 644 "$CERT_PATH"
+  chmod 600 "$KEY_PATH"
+  
+  log "SUCCESS" "Saved cert for $domain -> $CERT_PATH and $KEY_PATH"
+}
+
 # Main function
 main() {
   log "INFO" "Starting certificate extraction"
@@ -61,54 +88,48 @@ main() {
   TMP_DIR=$(mktemp -d)
   trap 'rm -rf "$TMP_DIR"' EXIT
   
-  # Extract certificates
-  log "INFO" "Parsing acme.json for certificates"
-  
   # Check if acme.json is empty or invalid
   if [ ! -s "$ACME_JSON" ] || ! jq empty "$ACME_JSON" 2>/dev/null; then
     log "WARNING" "acme.json is empty or invalid JSON"
     return 1
   fi
   
-  # Extract certificates using jq
-  jq -r '
-    .[]?.Certificates?[]? |
-    @base64
-  ' "$ACME_JSON" 2>/dev/null | while read -r cert64; do
+  log "INFO" "Parsing acme.json for certificates"
+  
+  # First, try to extract certificates using the original method
+  jq -r '.[]?.Certificates?[]? | @base64' "$ACME_JSON" 2>/dev/null | while read -r cert64; do
     if [ -z "$cert64" ]; then
       continue
     fi
     
-    cert_json=$(echo "$cert64" | base64 -d)
-    domain=$(echo "$cert_json" | jq -r '.domain.main')
-    cert_pem=$(echo "$cert_json" | jq -r '.certificate' | base64 -d)
-    key_pem=$(echo "$cert_json" | jq -r '.key' | base64 -d)
-    
-    if [ -z "$domain" ] || [ -z "$cert_pem" ] || [ -z "$key_pem" ] || [ "$domain" = "null" ]; then
-      log "WARNING" "Skipping invalid or incomplete cert block"
-      continue
-    fi
-    
-    CERT_PATH="$CERT_DIR/$domain.crt"
-    KEY_PATH="$CERT_DIR/$domain.key"
-    
-    echo "$cert_pem" > "$CERT_PATH"
-    echo "$key_pem" > "$KEY_PATH"
-    
-    # Set proper permissions
-    chmod 644 "$CERT_PATH"
-    chmod 600 "$KEY_PATH"
-    
-    log "SUCCESS" "Saved cert for $domain -> $CERT_PATH and $KEY_PATH"
+    process_certificate "$cert64"
   done
   
   # Check if any certificates were extracted
   if [ -z "$(ls -A "$CERT_DIR" 2>/dev/null)" ]; then
-    log "WARNING" "No certificates were extracted from acme.json"
-    return 1
+    log "WARNING" "No certificates extracted with primary method, trying alternative method"
+    
+    # Try alternative method for different JSON structure
+    jq -r '.letsencrypt.Certificates[]? | @base64' "$ACME_JSON" 2>/dev/null | while read -r cert64; do
+      if [ -z "$cert64" ]; then
+        continue
+      fi
+      
+      process_certificate "$cert64"
+    done
   fi
   
-  log "SUCCESS" "Certificate extraction completed"
+  # Check if any certificates were extracted after both attempts
+  if [ -z "$(ls -A "$CERT_DIR" 2>/dev/null)" ]; then
+    log "WARNING" "No certificates were extracted from acme.json"
+    log "INFO" "Dumping acme.json structure for debugging:"
+    jq -r 'keys[]' "$ACME_JSON" 2>/dev/null | log "INFO" "Root keys: $(cat)"
+    jq -r '.letsencrypt | keys[]' "$ACME_JSON" 2>/dev/null | log "INFO" "letsencrypt keys: $(cat)"
+    return 1
+  else
+    log "SUCCESS" "Certificate extraction completed"
+    return 0
+  fi
 }
 
 # Execute main function
