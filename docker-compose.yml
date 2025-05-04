@@ -42,7 +42,7 @@ services:
       - WEBHOOK_SECRET=${WEBHOOK_SECRET}
     volumes:
       - ./logs/webhook:/app/logs/webhook
-      - ./deployments/scripts:/app/scripts
+      - ./deployments/scripts:/app/deployments/scripts
     networks:
       - traefik
     labels:
