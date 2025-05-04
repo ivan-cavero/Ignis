@@ -33,24 +33,6 @@ services:
       - "traefik.http.routers.http-catch.middlewares=redirect-to-https@file"
       - "traefik.http.routers.http-catch.service=noop@internal"
 
-  webhook:
-    build: ./deployments/webhook
-    container_name: ignis-webhook
-    restart: always
-    environment:
-      - NODE_ENV=production
-      - WEBHOOK_SECRET=${WEBHOOK_SECRET}
-    volumes:
-      - ./logs/webhook:/app/logs/webhook
-    networks:
-      - traefik
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.webhook.rule=Host(`vps.ivancavero.com`)"
-      - "traefik.http.routers.webhook.entrypoints=webhook"
-      - "traefik.http.routers.webhook.tls.certresolver=letsencrypt"
-      - "traefik.http.services.webhook.loadbalancer.server.port=3333"
-
   backend:
     build: ./backend
     container_name: ignis-backend

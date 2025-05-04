@@ -9,7 +9,7 @@ services:
       - "80:80"
       - "443:443"
       - "8080:8080"
-      - "3333:3333"
+      - "3333:3333"  # Expose webhook port
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./proxy/traefik.yml:/etc/traefik/traefik.yml:ro
@@ -32,24 +32,6 @@ services:
       - "traefik.http.routers.http-catch.entrypoints=web"
       - "traefik.http.routers.http-catch.middlewares=redirect-to-https@file"
       - "traefik.http.routers.http-catch.service=noop@internal"
-
-  webhook:
-    build: ./deployments/webhook
-    container_name: ignis-webhook
-    restart: always
-    environment:
-      - NODE_ENV=development
-      - WEBHOOK_SECRET=${WEBHOOK_SECRET}
-    volumes:
-      - ./logs/webhook:/app/logs/webhook
-    networks:
-      - traefik
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.webhook.rule=Host(`vps.ivancavero.com`)"
-      - "traefik.http.routers.webhook.entrypoints=webhook"
-      - "traefik.http.routers.webhook.tls.certresolver=letsencrypt"
-      - "traefik.http.services.webhook.loadbalancer.server.port=3333"
 
   backend:
     build: ./backend
