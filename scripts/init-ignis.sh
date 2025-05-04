@@ -4,7 +4,7 @@
 # and security configurations.
 # 
 # Author: v0
-# Version: 3.1.0
+# Version: 3.2.0
 # License: MIT
 
 # Exit on any error
@@ -24,7 +24,16 @@ readonly SSH_PORT=49622                                      # Secure non-standa
 readonly INSTALLATION_DIR="/opt/ignis"                       # Default installation directory
 readonly GIT_REPO="https://github.com/ivan-cavero/Ignis.git" # Git repository URL
 readonly GIT_BRANCH="main"                                   # Default branch
-readonly SETUP_USER="dev"                                    # Default system user
+readonly SETUP_USER="ignis"                                  # Default system user
+readonly LOG_FILE="ignis-setup.log"                          # Log file name
+
+# Port configurations - format: "port/protocol|comment"
+readonly ALLOWED_PORTS=(
+  "$SSH_PORT/tcp|SSH"
+  "3333/tcp|Ignis Webhook"
+  "80/tcp|HTTP"
+  "443/tcp|HTTPS"
+)
 
 # Feature flags (can be overridden by command line arguments)
 SETUP_SSH=true                                              # Configure SSH security
@@ -36,6 +45,7 @@ UPDATE_SYSTEM=true                                          # Update system pack
 ALLOW_PASSWORD_AUTH=true                                    # Allow password authentication
 ALLOW_TCP_FORWARDING=true                                   # Allow TCP forwarding for remote development
 USE_IPTABLES=false                                          # Use iptables instead of ufw
+LOG_TO_FILE=false                                           # Write logs to file
 
 # Required packages by category
 readonly SYSTEM_PACKAGES="curl ca-certificates gnupg unzip git software-properties-common jq"
@@ -44,11 +54,20 @@ readonly JAVA_PACKAGES="openjdk-17-jre-headless"
 
 # ==================== UTILITY FUNCTIONS ====================
 
+# Pure function to log a message to file if enabled
+log_to_file() {
+  local message="$1"
+  if [ "$LOG_TO_FILE" = true ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $message" >> "$LOG_FILE"
+  fi
+}
+
 # Pure function to print a formatted message
 print_message() {
   local color="$1"
   local message="$2"
   echo -e "${color}${message}${COLOR_RESET}"
+  log_to_file "$message"
 }
 
 # Pure function to print a section header
@@ -128,6 +147,9 @@ parse_arguments() {
       --user=*)
         SETUP_USER="${1#*=}"
         ;;
+      --log-file=*)
+        LOG_FILE="${1#*=}"
+        ;;
       --no-ssh)
         SETUP_SSH=false
         ;;
@@ -154,6 +176,9 @@ parse_arguments() {
         ;;
       --use-iptables)
         USE_IPTABLES=true
+        ;;
+      --log-to-file)
+        LOG_TO_FILE=true
         ;;
       --help)
         show_help
@@ -182,6 +207,7 @@ Options:
 --repo=URL            Set Git repository URL
 --branch=BRANCH       Set Git branch (default: main)
 --user=USERNAME       Set system user (default: dev)
+--log-file=FILE       Set log file name (default: ignis-setup.log)
 --no-ssh              Skip SSH security configuration
 --no-docker           Skip Docker installation
 --no-java             Skip Java installation
@@ -191,11 +217,20 @@ Options:
 --no-fail2ban         Skip Fail2Ban installation and configuration
 --no-tcp-forwarding   Disable TCP forwarding (will break VS Code Remote)
 --use-iptables        Use iptables instead of ufw for firewall
+--log-to-file         Write logs to file
 --help                Show this help message
 
 Example:
-$0 --ssh-port=2222 --dir=/home/ignis/Ignis --no-ssh
+$0 --ssh-port=2222 --dir=/home/ignis/Ignis --no-ssh --log-to-file
 EOF
+}
+
+# Initialize log file if logging is enabled
+initialize_log_file() {
+  if [ "$LOG_TO_FILE" = true ]; then
+    echo "=== IGNIS SYSTEM INITIALIZATION LOG - $(date) ===" > "$LOG_FILE"
+    print_message "$COLOR_INFO" "Logging to file: $LOG_FILE"
+  fi
 }
 
 # ==================== INSTALLATION FUNCTIONS ====================
@@ -433,21 +468,19 @@ configure_ufw() {
   print_message "$COLOR_INFO" "Resetting UFW to default state..."
   sudo ufw --force reset
 
-  # Configure SSH port
-  if [ "$SSH_PORT" != "22" ]; then
-    # Delete default SSH rule if changing port
-    sudo ufw delete allow 22/tcp >/dev/null 2>&1 || true
-  fi
-
-  # Allow SSH on configured port
-  sudo ufw allow "$SSH_PORT/tcp" comment 'SSH'
-
-  # Allow webhook port
-  sudo ufw allow 3333/tcp comment 'Ignis Webhook'
-
-  # Allow HTTP/HTTPS
-  sudo ufw allow http
-  sudo ufw allow https
+  # Configure ports from ALLOWED_PORTS array
+  print_message "$COLOR_INFO" "Configuring firewall rules..."
+  
+  for port_config in "${ALLOWED_PORTS[@]}"; do
+    # Split the port configuration into port/protocol and comment
+    IFS="|" read -r port_proto comment <<< "$port_config"
+    
+    # Split port/protocol into port and protocol
+    IFS="/" read -r port protocol <<< "$port_proto"
+    
+    print_message "$COLOR_INFO" "Adding rule: $port/$protocol ($comment)"
+    sudo ufw allow "$port/$protocol" comment "$comment"
+  done
 
   # Enable UFW if not already enabled
   print_message "$COLOR_INFO" "Enabling firewall..."
@@ -497,15 +530,19 @@ configure_iptables() {
   # Allow loopback
   sudo iptables -A INPUT -i lo -j ACCEPT
 
-  # Allow SSH on configured port
-  sudo iptables -A INPUT -p tcp --dport "$SSH_PORT" -j ACCEPT
-
-  # Allow webhook port
-  sudo iptables -A INPUT -p tcp --dport 3333 -j ACCEPT
-
-  # Allow HTTP/HTTPS
-  sudo iptables -A INPUT -p tcp --dport 80 -j ACCEPT
-  sudo iptables -A INPUT -p tcp --dport 443 -j ACCEPT
+  # Configure ports from ALLOWED_PORTS array
+  print_message "$COLOR_INFO" "Configuring firewall rules..."
+  
+  for port_config in "${ALLOWED_PORTS[@]}"; do
+    # Split the port configuration into port/protocol and comment
+    IFS="|" read -r port_proto comment <<< "$port_config"
+    
+    # Split port/protocol into port and protocol
+    IFS="/" read -r port protocol <<< "$port_proto"
+    
+    print_message "$COLOR_INFO" "Adding rule: $port/$protocol ($comment)"
+    sudo iptables -A INPUT -p "$protocol" --dport "$port" -j ACCEPT
+  done
 
   # Save rules
   sudo netfilter-persistent save
@@ -955,6 +992,7 @@ generate_summary() {
   echo -e "  System User: $SETUP_USER"
   echo -e "  SSH Port: $SSH_PORT"
   echo -e "  Password Authentication: $([ "$ALLOW_PASSWORD_AUTH" = true ] && echo "Enabled" || echo "Disabled")"
+  echo -e "  Logging to File: $([ "$LOG_TO_FILE" = true ] && echo "Enabled ($LOG_FILE)" || echo "Disabled")"
 
   # Docker permissions reminder
   if command_exists docker; then
@@ -988,6 +1026,9 @@ main() {
 
   # Parse command line arguments
   parse_arguments "$@"
+  
+  # Initialize log file if logging is enabled
+  initialize_log_file
 
   # Run installation steps
   update_system
