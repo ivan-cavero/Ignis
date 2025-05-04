@@ -41,6 +41,7 @@ services:
       - NODE_ENV=production
       - WEBHOOK_SECRET=${WEBHOOK_SECRET}
     volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
       - ./logs:/app/logs
       - ./deployments/scripts:/app/deployments/scripts
       - .:/app/project

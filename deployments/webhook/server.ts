@@ -18,7 +18,7 @@ const CONFIG = {
   ENV_FILE: ".env",
   LOGS_DIR: join(process.cwd(), "logs/webhook"),
   PROJECT_ROOT: "/app/project",
-  DEPLOYMENT_SCRIPT: join(process.cwd(), "../deployments/scripts/deploy.sh"),
+  DEPLOYMENT_SCRIPT: join("/app/project", "deployments/scripts/deploy.sh"),
 }
 
 // Ensure logs directory exists
@@ -174,10 +174,22 @@ const executeCommand = (command: string): Promise<string> =>
  */
 const deployComponent = (options: DeploymentOptions): Promise<string> => {
   const { component, environment, branch } = options
-  // Execute the unified deployment script with the correct path
-  const command = `cd ${CONFIG.PROJECT_ROOT} && bash deployments/scripts/deploy.sh --component=${component} --environment=${environment} --branch=${branch}`
-  logger.info(`Executing: ${command}`)
-  return executeCommand(command)
+
+  // Verificar que Docker está disponible
+  return executeCommand("docker --version")
+    .then(() => {
+      // Ejecutar el script de despliegue desde el directorio raíz del proyecto
+      const command = `cd ${CONFIG.PROJECT_ROOT} && bash deployments/scripts/deploy.sh --component=${component} --environment=${environment} --branch=${branch}`
+      logger.info(`Executing: ${command}`)
+      return executeCommand(command)
+    })
+    .catch((error) => {
+      logger.error(`Docker not available: ${error.message}`)
+      // Intentar una alternativa: ejecutar el script directamente en el host
+      logger.info("Attempting to execute deployment directly on host...")
+      const command = `cd ${CONFIG.PROJECT_ROOT} && bash deployments/scripts/deploy.sh --component=${component} --environment=${environment} --branch=${branch}`
+      return executeCommand(command)
+    })
 }
 
 /**
@@ -297,6 +309,19 @@ const startServer = async (): Promise<void> => {
   }
 
   try {
+    // Verificar que el directorio del proyecto existe
+    if (!existsSync(CONFIG.PROJECT_ROOT)) {
+      logger.error(`Project directory ${CONFIG.PROJECT_ROOT} does not exist`)
+      process.exit(1)
+    }
+
+    // Verificar que el script de despliegue existe
+    const deploymentScriptPath = join(CONFIG.PROJECT_ROOT, "deployments/scripts/deploy.sh")
+    if (!existsSync(deploymentScriptPath)) {
+      logger.error(`Deployment script ${deploymentScriptPath} does not exist`)
+      process.exit(1)
+    }
+
     const serverConfig = {
       hostname: "0.0.0.0",
       port: CONFIG.PORT,
