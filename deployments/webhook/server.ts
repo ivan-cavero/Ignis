@@ -17,13 +17,19 @@ const CONFIG = {
   WEBHOOK_PATH: "/webhook",
   ENV_FILE: ".env",
   LOGS_DIR: join(process.cwd(), "logs/webhook"),
-  PROJECT_ROOT: "/app",
-  DEPLOYMENT_SCRIPT: join(process.cwd(), "deployments/scripts/deploy.sh"),
+  PROJECT_ROOT: "/app/project",
+  DEPLOYMENT_SCRIPT: join(process.cwd(), "../deployments/scripts/deploy.sh"),
 }
 
 // Ensure logs directory exists
 if (!existsSync(CONFIG.LOGS_DIR)) {
   mkdirSync(CONFIG.LOGS_DIR, { recursive: true })
+}
+
+// Ensure deployment logs directory exists
+const DEPLOYMENT_LOGS_DIR = join(process.cwd(), "logs/deployments")
+if (!existsSync(DEPLOYMENT_LOGS_DIR)) {
+  mkdirSync(DEPLOYMENT_LOGS_DIR, { recursive: true })
 }
 
 // Types
@@ -168,8 +174,8 @@ const executeCommand = (command: string): Promise<string> =>
  */
 const deployComponent = (options: DeploymentOptions): Promise<string> => {
   const { component, environment, branch } = options
-  // Execute the unified deployment script
-  const command = `bash ${CONFIG.DEPLOYMENT_SCRIPT} --component=${component} --environment=${environment} --branch=${branch}`
+  // Execute the unified deployment script with the correct path
+  const command = `cd ${CONFIG.PROJECT_ROOT} && bash deployments/scripts/deploy.sh --component=${component} --environment=${environment} --branch=${branch}`
   logger.info(`Executing: ${command}`)
   return executeCommand(command)
 }
