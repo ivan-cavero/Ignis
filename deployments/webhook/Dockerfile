@@ -17,6 +17,11 @@ COPY tsconfig.json .
 
 # Create necessary directories
 RUN mkdir -p logs/webhook
+RUN mkdir -p /opt/ignis/deployments/scripts /opt/ignis/logs/webhook-bridge
+
+# Copy the bridge script and make it executable
+COPY webhook-bridge.sh /opt/ignis/deployments/scripts/webhook-bridge.sh
+RUN chmod +x /opt/ignis/deployments/scripts/webhook-bridge.sh
 
 # Expose the webhook port
 EXPOSE 3333

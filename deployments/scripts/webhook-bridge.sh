@@ -30,7 +30,7 @@ fi
 log "Starting deployment of $COMPONENT in $ENVIRONMENT environment (branch: $BRANCH)"
 
 # Execute the deployment script
-cd /opt/ignis
+cd /app/project
 log "Executing: bash deployments/scripts/deploy.sh --component=$COMPONENT --environment=$ENVIRONMENT --branch=$BRANCH"
 bash deployments/scripts/deploy.sh --component="$COMPONENT" --environment="$ENVIRONMENT" --branch="$BRANCH" >> "$LOG_FILE" 2>&1
 
