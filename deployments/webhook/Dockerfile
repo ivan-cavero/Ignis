@@ -10,9 +10,6 @@ RUN bun install
 COPY server.ts .
 COPY tsconfig.json .
 
-# Copy deployment scripts to the expected location
-COPY ../scripts /app/deployments/scripts
-
 # Create necessary directories
 RUN mkdir -p logs/webhook
 
