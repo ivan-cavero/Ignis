@@ -17,19 +17,12 @@ const CONFIG = {
   WEBHOOK_PATH: "/webhook",
   ENV_FILE: ".env",
   LOGS_DIR: join(process.cwd(), "logs/webhook"),
-  PROJECT_ROOT: "/app/project",
-  DEPLOYMENT_SCRIPT: join("/app/project", "deployments/scripts/deploy.sh"),
+  BRIDGE_SCRIPT: "/opt/ignis/deployments/scripts/webhook-bridge.sh",
 }
 
 // Ensure logs directory exists
 if (!existsSync(CONFIG.LOGS_DIR)) {
   mkdirSync(CONFIG.LOGS_DIR, { recursive: true })
-}
-
-// Ensure deployment logs directory exists
-const DEPLOYMENT_LOGS_DIR = join(process.cwd(), "logs/deployments")
-if (!existsSync(DEPLOYMENT_LOGS_DIR)) {
-  mkdirSync(DEPLOYMENT_LOGS_DIR, { recursive: true })
 }
 
 // Types
@@ -168,28 +161,17 @@ const executeCommand = (command: string): Promise<string> =>
   })
 
 /**
- * Pure function to deploy a component
+ * Pure function to deploy a component using the bridge script
  * @param options - Deployment options
  * @returns Promise that resolves when deployment completes
  */
 const deployComponent = (options: DeploymentOptions): Promise<string> => {
   const { component, environment, branch } = options
 
-  // Verificar que Docker está disponible
-  return executeCommand("docker --version")
-    .then(() => {
-      // Ejecutar el script de despliegue desde el directorio raíz del proyecto
-      const command = `cd ${CONFIG.PROJECT_ROOT} && bash deployments/scripts/deploy.sh --component=${component} --environment=${environment} --branch=${branch}`
-      logger.info(`Executing: ${command}`)
-      return executeCommand(command)
-    })
-    .catch((error) => {
-      logger.error(`Docker not available: ${error.message}`)
-      // Intentar una alternativa: ejecutar el script directamente en el host
-      logger.info("Attempting to execute deployment directly on host...")
-      const command = `cd ${CONFIG.PROJECT_ROOT} && bash deployments/scripts/deploy.sh --component=${component} --environment=${environment} --branch=${branch}`
-      return executeCommand(command)
-    })
+  // Execute the bridge script on the host
+  const command = `${CONFIG.BRIDGE_SCRIPT} ${component} ${environment} ${branch}`
+  logger.info(`Executing bridge script: ${command}`)
+  return executeCommand(command)
 }
 
 /**
@@ -259,19 +241,23 @@ const handleWebhook = async (req: Request): Promise<Response> => {
     logger.info(`Changed components: ${changedComponents.join(", ")}`)
     logger.logToFile(`Deploying components ${changedComponents.join(", ")} to ${environment}`, "INFO")
 
-    // Deploy each changed component using Promise.all for parallel execution
-    Promise.all(
-      changedComponents.map((component) =>
-        deployComponent({
+    // Deploy each component sequentially to avoid conflicts
+    for (const component of changedComponents) {
+      try {
+        await deployComponent({
           component,
           environment,
           branch,
-        }),
-      ),
-    ).catch((error) => {
-      logger.error(`Deployment error: ${error instanceof Error ? error.message : String(error)}`)
-      logger.logToFile(`Deployment error: ${error instanceof Error ? error.message : String(error)}`, "ERROR")
-    })
+        })
+        logger.success(`Successfully deployed ${component}`)
+      } catch (error) {
+        logger.error(`Error deploying ${component}: ${error instanceof Error ? error.message : String(error)}`)
+        logger.logToFile(
+          `Error deploying ${component}: ${error instanceof Error ? error.message : String(error)}`,
+          "ERROR",
+        )
+      }
+    }
 
     return createResponse(`Deployment triggered for ${changedComponents.join(", ")} in ${environment} environment`, 200)
   } catch (error) {
@@ -286,7 +272,10 @@ const handleWebhook = async (req: Request): Promise<Response> => {
  * @returns Boolean indicating if all requirements are met
  */
 const validateRequirements = (): boolean => {
-  const checks = [{ condition: !!process.env.WEBHOOK_SECRET, message: "WEBHOOK_SECRET environment variable" }]
+  const checks = [
+    { condition: !!process.env.WEBHOOK_SECRET, message: "WEBHOOK_SECRET environment variable" },
+    { condition: existsSync(CONFIG.BRIDGE_SCRIPT), message: `Bridge script at ${CONFIG.BRIDGE_SCRIPT}` },
+  ]
 
   const failedChecks = checks.filter((check) => !check.condition)
 
@@ -309,19 +298,6 @@ const startServer = async (): Promise<void> => {
   }
 
   try {
-    // Verificar que el directorio del proyecto existe
-    if (!existsSync(CONFIG.PROJECT_ROOT)) {
-      logger.error(`Project directory ${CONFIG.PROJECT_ROOT} does not exist`)
-      process.exit(1)
-    }
-
-    // Verificar que el script de despliegue existe
-    const deploymentScriptPath = join(CONFIG.PROJECT_ROOT, "deployments/scripts/deploy.sh")
-    if (!existsSync(deploymentScriptPath)) {
-      logger.error(`Deployment script ${deploymentScriptPath} does not exist`)
-      process.exit(1)
-    }
-
     const serverConfig = {
       hostname: "0.0.0.0",
       port: CONFIG.PORT,

@@ -41,10 +41,8 @@ services:
       - NODE_ENV=development
       - WEBHOOK_SECRET=${WEBHOOK_SECRET}
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - ./logs:/app/logs
-      - ./deployments/scripts:/app/deployments/scripts
-      - .:/app/project
+      - ./logs/webhook:/app/logs/webhook
+      - ./deployments/scripts/webhook-bridge.sh:/opt/ignis/deployments/scripts/webhook-bridge.sh
     networks:
       - traefik
     labels:
