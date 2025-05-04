@@ -16,6 +16,11 @@ if [ "$(id -un)" != "ignis" ]; then
   exit 1
 fi
 
+echo -e "${CYAN}📦 Ensuring base dependencies...${RESET}"
+sudo apt update -y
+sudo apt install -y curl ca-certificates gnupg unzip git software-properties-common jq
+
+
 echo -e "${CYAN}☕ [1/9] Installing Java, NVM, Node.js LTS...${RESET}"
 
 # Install Java
@@ -51,6 +56,7 @@ sudo apt install -y ufw fail2ban
 
 # Configure UFW
 sudo ufw allow 2222/tcp
+sudo ufw allow 3333/tcp
 sudo ufw allow http
 sudo ufw allow https
 sudo ufw --force enable
@@ -84,6 +90,14 @@ echo -e "${CYAN}🔐 [5/9] Setting file and folder permissions...${RESET}"
 # Set permissions for project directory
 chmod +x $PROJECT_DIR/scripts/*.sh
 chmod +x $PROJECT_DIR/scripts/webhook-server.ts
+
+# Create acme if not exist
+
+if [ ! -f "$PROJECT_DIR/proxy/acme.json" ]; then
+  echo -e "${YELLOW}🔐 Creating acme.json...${RESET}"
+  touch "$PROJECT_DIR/proxy/acme.json"
+fi
+
 chmod 600 $PROJECT_DIR/proxy/acme.json
 chmod 644 $PROJECT_DIR/proxy/traefik.yml
 chmod 644 $PROJECT_DIR/proxy/dynamic/*.yml
@@ -92,27 +106,67 @@ chmod 644 $PROJECT_DIR/docker-compose.yml
 echo -e "${CYAN}🧰 [6/9] Creating and enabling systemd webhook service...${RESET}"
 
 # Copy systemd service file
-sudo cp $PROJECT_DIR/ignis-webhook.service $WEBHOOK_SERVICE
+sudo cp $PROJECT_DIR/scripts/ignis-webhook.service $WEBHOOK_SERVICE
 sudo systemctl daemon-reload
 sudo systemctl enable ignis-webhook.service
 sudo systemctl start ignis-webhook.service
 
+# Start Docker containers
 echo -e "${CYAN}🐋 [7/9] Starting Docker containers...${RESET}"
 
-# Start Docker containers
+if ! docker ps >/dev/null 2>&1; then
+  echo -e "${YELLOW}⚠️ User 'ignis' does not have Docker socket access yet. Using sudo docker temporarily...${RESET}"
+  DOCKER_CMD="sudo docker"
+else
+  DOCKER_CMD="docker"
+fi
+
 cd $PROJECT_DIR
-docker compose up -d
+$DOCKER_CMD compose up -d
 
 echo -e "${CYAN}📋 [8/9] Verifying services...${RESET}"
 
 # Check Docker containers
-docker_status=$(docker ps --format "{{.Names}}" | grep -E 'traefik|backend|admin|user')
+docker_status=$($DOCKER_CMD ps --format "{{.Names}}" | grep -E 'traefik|backend|admin|user')
 if [ -n "$docker_status" ]; then
   echo -e "${GREEN}✔ Docker containers running:${RESET}"
   echo "$docker_status"
 else
   echo -e "${RED}✖ Docker containers are not running properly${RESET}"
 fi
+
+echo -e "${CYAN}🔐 [9/9] Extracting certificates from acme.json...${RESET}"
+
+CERT_DIR="$PROJECT_DIR/proxy/certs"
+mkdir -p "$CERT_DIR"
+
+ACME_JSON="$PROJECT_DIR/proxy/acme.json"
+
+TMP_DIR=$(mktemp -d)
+trap 'rm -rf "$TMP_DIR"' EXIT
+
+jq -r '
+  .[]?.Certificates?[]? |
+  @base64
+' "$ACME_JSON" | while read -r cert64; do
+  cert_json=$(echo "$cert64" | base64 -d)
+  domain=$(echo "$cert_json" | jq -r '.domain.main')
+  cert_pem=$(echo "$cert_json" | jq -r '.certificate' | base64 -d)
+  key_pem=$(echo "$cert_json" | jq -r '.key' | base64 -d)
+
+  if [ -z "$domain" ] || [ -z "$cert_pem" ] || [ -z "$key_pem" ]; then
+    echo -e "${YELLOW}⚠️ Skipping invalid or incomplete cert block${RESET}"
+    continue
+  fi
+
+  CERT_PATH="$CERT_DIR/$domain.crt"
+  KEY_PATH="$CERT_DIR/$domain.key"
+
+  echo "$cert_pem" > "$CERT_PATH"
+  echo "$key_pem" > "$KEY_PATH"
+
+  echo -e "${GREEN}✔ Saved cert for $domain -> $CERT_PATH and $KEY_PATH${RESET}"
+done
 
 # Check systemd service
 if systemctl is-active --quiet ignis-webhook.service; then

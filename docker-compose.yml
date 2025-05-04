@@ -69,6 +69,20 @@ services:
       - "traefik.http.routers.admin.tls.certresolver=letsencrypt"
       - "traefik.http.services.admin.loadbalancer.server.port=80"
 
+  landing-frontend:
+    build: ./frontend/landing
+    container_name: ignis-landing
+    restart: always
+    networks:
+      - traefik
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.vps.rule=Host(`vps.ivancavero.com`)"
+      - "traefik.http.routers.vps.entrypoints=websecure"
+      - "traefik.http.routers.vps.tls.certresolver=letsencrypt"
+      - "traefik.http.services.vps.loadbalancer.server.port=80"
+
+
 networks:
   traefik:
     driver: bridge
