@@ -9,7 +9,6 @@ services:
       - "80:80"
       - "443:443"
       - "8080:8080"
-      - "3333:3333"  # Expose webhook port
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ./proxy/traefik.yml:/etc/traefik/traefik.yml:ro

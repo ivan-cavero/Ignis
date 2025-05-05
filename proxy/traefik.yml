@@ -1,20 +1,34 @@
+# Traefik configuration for Ignis
+
+# Global configuration
+global:
+  checkNewVersion: true
+  sendAnonymousUsage: false
+
+# Log configuration
+log:
+  level: INFO
+  format: common
+
+# Access logs
+accessLog:
+  format: common
+
+# API and dashboard configuration
+api:
+  dashboard: true
+  insecure: false
+
+# Entry points configuration
 entryPoints:
   web:
     address: ":80"
-    # HTTP to HTTPS redirect
-    http:
-      redirections:
-        entryPoint:
-          to: websecure
-          scheme: https
   websecure:
     address: ":443"
-  webhook:
-    address: ":3333"
+  dashboard:
+    address: ":8080"
 
-api:
-  dashboard: true
-
+# Providers configuration
 providers:
   docker:
     endpoint: "unix:///var/run/docker.sock"
@@ -23,6 +37,7 @@ providers:
     directory: "/etc/traefik/dynamic"
     watch: true
 
+# Certificate resolvers
 certificatesResolvers:
   letsencrypt:
     acme:

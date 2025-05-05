@@ -1,321 +1,141 @@
-/**
- * Ignis Deployment Webhook Server
- *
- * This server listens for GitHub webhook events and triggers selective deployments
- * based on which components have changed. It supports multiple environments (main/dev)
- * and provides detailed logging.
- */
-import { createHmac, timingSafeEqual } from "crypto"
-import { existsSync, mkdirSync, appendFileSync } from "fs"
-import { join } from "path"
-import { exec } from "child_process"
-import { serve } from "bun"
+import { serve } from "bun";
+import { spawnSync } from "child_process";
+import { writeFileSync, mkdirSync } from "fs";
+import { join } from "path";
 
-// Configuration constants
-const CONFIG = {
-  PORT: 3333,
-  WEBHOOK_PATH: "/webhook",
-  ENV_FILE: ".env",
-  LOGS_DIR: join(process.cwd(), "logs/webhook"),
-  BRIDGE_SCRIPT: "/opt/ignis/deployments/scripts/webhook-bridge.sh",
+const WEBHOOK_SECRET = process.env.WEBHOOK_SECRET || "";
+const DEPLOY_SCRIPT = "/opt/ignis/deployments/scripts/deploy.sh";
+const LOG_DIR = "/opt/ignis/logs/webhook";
+
+const COMPONENT_MAP: Record<string, string> = {
+  "backend/": "backend",
+  "frontend/user/": "user-frontend",
+  "frontend/admin/": "admin-frontend",
+  "frontend/landing/": "landing-frontend",
+  "proxy/": "proxy",
+  "deployments/webhook/": "webhook",
+  "scripts/": "infrastructure",
+};
+
+function verifySignature(body: string, signature: string): boolean {
+  const crypto = require("crypto");
+  const hmac = crypto.createHmac("sha256", WEBHOOK_SECRET);
+  hmac.update(body);
+  const expected = `sha256=${hmac.digest("hex")}`;
+  return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
 }
 
-// Ensure logs directory exists
-if (!existsSync(CONFIG.LOGS_DIR)) {
-  mkdirSync(CONFIG.LOGS_DIR, { recursive: true })
-}
-
-// Types
-type LogLevel = "INFO" | "SUCCESS" | "WARNING" | "ERROR"
-type LogFunction = (message: string) => void
-type FileLogFunction = (message: string, level?: LogLevel) => string
-
-interface Logger {
-  info: LogFunction
-  success: LogFunction
-  warn: LogFunction
-  error: LogFunction
-  logToFile: FileLogFunction
-}
-
-interface DeploymentOptions {
-  component: string
-  environment: string
-  branch: string
-}
-
-interface WebhookPayload {
-  repository?: {
-    name?: string
-  }
-  ref?: string
-  commits?: Array<{
-    added?: string[]
-    modified?: string[]
-    removed?: string[]
-  }>
-}
-
-/**
- * Pure function to create a logger with consistent formatting
- * @returns Object with logging functions
- */
-const createLogger = (): Logger => ({
-  info: (message: string): void => console.log(`[INFO] ${message}`),
-  success: (message: string): void => console.log(`[SUCCESS] ${message}`),
-  warn: (message: string): void => console.warn(`[WARNING] ${message}`),
-  error: (message: string): void => console.error(`[ERROR] ${message}`),
-
-  // Pure function to log to file with timestamp
-  logToFile: (message: string, level: LogLevel = "INFO"): string => {
-    const timestamp = new Date().toISOString()
-    const logFile = join(CONFIG.LOGS_DIR, `webhook-${new Date().toISOString().split("T")[0]}.log`)
-    const logMessage = `[${timestamp}] [${level}] ${message}\n`
-
-    appendFileSync(logFile, logMessage)
-    return message
-  },
-})
-
-const logger = createLogger()
-
-/**
- * Pure function to verify the GitHub webhook signature against the request body
- * @param body - The raw request body
- * @param signature - The signature from GitHub
- * @returns Boolean indicating if signature is valid
- */
-const verifySignature = (body: string, signature: string): boolean => {
-  const secret = process.env.WEBHOOK_SECRET ?? ""
-
-  if (!secret) {
-    logger.error("WEBHOOK_SECRET environment variable is not set")
-    logger.logToFile("WEBHOOK_SECRET environment variable is not set", "ERROR")
-    return false
-  }
-
-  const hmac = createHmac("sha256", secret)
-  const digest = "sha256=" + hmac.update(body).digest("hex")
-
-  try {
-    return timingSafeEqual(Buffer.from(digest), Buffer.from(signature))
-  } catch (error) {
-    logger.error(`Signature verification error: ${error instanceof Error ? error.message : String(error)}`)
-    logger.logToFile(`Signature verification error: ${error instanceof Error ? error.message : String(error)}`, "ERROR")
-    return false
-  }
-}
-
-/**
- * Pure function to create a response object
- * @param message - Response message
- * @param status - HTTP status code
- * @returns Response object
- */
-const createResponse = (message: string, status: number): Response => new Response(message, { status })
-
-/**
- * Pure function to determine which components have changed based on the modified files
- * @param files - Array of modified file paths
- * @returns Array of component names that have changed
- */
-const getChangedComponents = (files: string[]): string[] => {
-  const componentPaths: Record<string, string[]> = {
-    backend: ["backend/"],
-    "admin-frontend": ["frontend/admin/"],
-    "user-frontend": ["frontend/user/"],
-    "landing-frontend": ["frontend/landing/"],
-    proxy: ["proxy/"],
-    infrastructure: ["docker-compose.yml", "deployments/"],
-  }
-
-  return Object.entries(componentPaths)
-    .filter(([_, paths]) => paths.some((path) => files.some((file) => file.startsWith(path))))
-    .map(([component]) => component)
-}
-
-/**
- * Pure function to execute a shell command
- * @param command - Command to execute
- * @returns Promise that resolves when command completes
- */
-const executeCommand = (command: string): Promise<string> =>
-  new Promise((resolve, reject) => {
-    exec(command, (error, stdout, stderr) => {
-      if (error) {
-        logger.error(`Command execution error: ${error.message}`)
-        logger.logToFile(`Command execution error: ${error.message}`, "ERROR")
-        reject(error)
-        return
+function detectChangedComponents(files: string[]): string[] {
+  const detected = new Set<string>();
+  for (const file of files) {
+    for (const [prefix, component] of Object.entries(COMPONENT_MAP)) {
+      if (file.startsWith(prefix)) {
+        detected.add(component);
+        break;
       }
-
-      if (stderr) {
-        logger.warn(`Command stderr: ${stderr}`)
-        logger.logToFile(`Command stderr: ${stderr}`, "WARNING")
-      }
-
-      logger.info(`Command stdout: ${stdout}`)
-      logger.logToFile(`Command stdout: ${stdout}`, "INFO")
-      resolve(stdout)
-    })
-  })
-
-/**
- * Pure function to deploy a component using the bridge script
- * @param options - Deployment options
- * @returns Promise that resolves when deployment completes
- */
-const deployComponent = (options: DeploymentOptions): Promise<string> => {
-  const { component, environment, branch } = options
-
-  // Execute the bridge script on the host
-  const command = `${CONFIG.BRIDGE_SCRIPT} ${component} ${environment} ${branch}`
-  logger.info(`Executing bridge script: ${command}`)
-  return executeCommand(command)
+    }
+  }
+  return [...detected];
 }
 
-/**
- * Handles webhook requests by validating and triggering deployments
- * @param req - Request object
- * @returns Response object
- */
-const handleWebhook = async (req: Request): Promise<Response> => {
-  const url = new URL(req.url)
-
-  // Early return for invalid requests
-  if (req.method !== "POST" || url.pathname !== CONFIG.WEBHOOK_PATH) {
-    return createResponse("Not found", 404)
-  }
-
-  const body = await req.text()
-  const signature = req.headers.get("x-hub-signature-256") ?? ""
-
-  // Validate signature
-  if (!signature || !verifySignature(body, signature)) {
-    logger.warn("Invalid signature received")
-    logger.logToFile("Invalid signature received", "WARNING")
-    return createResponse("Invalid signature", 401)
-  }
-
+function logWebhookEvent(data: unknown, logText: string): void {
   try {
-    // Parse the webhook payload
-    const payload = JSON.parse(body) as WebhookPayload
-    const event = req.headers.get("x-github-event") ?? "unknown"
+    mkdirSync(LOG_DIR, { recursive: true });
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const file = join(LOG_DIR, `webhook-${timestamp}.log`);
+    writeFileSync(file, logText + "\n\n--- RAW PAYLOAD ---\n" + JSON.stringify(data, null, 2));
+  } catch (err) {
+    console.error("Failed to write log:", err);
+  }
+}
 
-    // Only process push events
-    if (event !== "push") {
-      logger.info(`Ignoring non-push event: ${event}`)
-      logger.logToFile(`Ignoring non-push event: ${event}`, "INFO")
-      return createResponse(`Event type ${event} ignored`, 200)
+type Commit = {
+  added?: string[];
+  modified?: string[];
+  removed?: string[];
+};
+
+serve({
+  port: 3333,
+  async fetch(req) {
+    const url = new URL(req.url);
+
+    if (req.method !== "POST" || url.pathname !== "/webhook") {
+      return new Response("Not found", { status: 404 });
     }
 
-    // Extract repository and branch information
-    const repo = payload.repository?.name ?? "unknown"
-    const branch = payload.ref?.replace("refs/heads/", "") ?? "unknown"
-    const files =
-      payload.commits?.flatMap((commit) => [
-        ...(commit.added || []),
-        ...(commit.modified || []),
-        ...(commit.removed || []),
-      ]) || []
+    const bodyText = await req.text();
+    const signature = req.headers.get("x-hub-signature-256");
 
-    // Determine environment based on branch
-    const environment = branch === "main" ? "production" : branch === "dev" ? "development" : null
-
-    if (!environment) {
-      logger.info(`Ignoring push to branch ${branch}`)
-      logger.logToFile(`Ignoring push to branch ${branch}`, "INFO")
-      return createResponse(`Branch ${branch} is not configured for deployment`, 200)
+    if (!signature || !verifySignature(bodyText, signature)) {
+      return new Response("Invalid signature", { status: 403 });
     }
 
-    // Determine which components have changed
-    const changedComponents = getChangedComponents(files)
-
-    if (changedComponents.length === 0) {
-      logger.info(`No deployable components changed in this push`)
-      logger.logToFile(`No deployable components changed in this push to ${branch}`, "INFO")
-      return createResponse("No deployable components changed", 200)
+    let payload: any;
+    try {
+      payload = JSON.parse(bodyText);
+    } catch {
+      return new Response("Invalid JSON", { status: 400 });
     }
 
-    logger.success(`Valid webhook received for ${repo}/${branch}`)
-    logger.info(`Changed components: ${changedComponents.join(", ")}`)
-    logger.logToFile(`Deploying components ${changedComponents.join(", ")} to ${environment}`, "INFO")
+    const ref = payload.ref || "";
+    const branch = ref.replace("refs/heads/", "");
+    const validBranches = ["main", "dev"];
+    if (!validBranches.includes(branch)) {
+      return new Response("Ignored branch", { status: 200 });
+    }
 
-    // Deploy each component sequentially to avoid conflicts
-    for (const component of changedComponents) {
-      try {
-        await deployComponent({
-          component,
-          environment,
-          branch,
+    const environment = branch === "main" ? "production" : "development";
+
+    const commits = Array.isArray(payload.commits) ? (payload.commits as Commit[]) : [];
+
+    const changedFiles: string[] = [
+      ...new Set(
+        commits.flatMap((commit) => {
+          const added = commit.added ?? [];
+          const modified = commit.modified ?? [];
+          const removed = commit.removed ?? [];
+          return [...added, ...modified, ...removed];
         })
-        logger.success(`Successfully deployed ${component}`)
-      } catch (error) {
-        logger.error(`Error deploying ${component}: ${error instanceof Error ? error.message : String(error)}`)
-        logger.logToFile(
-          `Error deploying ${component}: ${error instanceof Error ? error.message : String(error)}`,
-          "ERROR",
-        )
+      ),
+    ];
+
+    const components = detectChangedComponents(changedFiles);
+    const summary = `Branch: ${branch} (${environment})\nDetected changes in: ${components.join(", ") || "none"}`;
+
+    if (components.length === 0) {
+      logWebhookEvent(payload, `No components changed.\n\n${summary}`);
+      return new Response("No deployment needed", { status: 200 });
+    }
+
+    let fullLog = summary + "\n";
+
+    for (const component of components) {
+      fullLog += `\n>>> Deploying ${component}...\n`;
+      const result = spawnSync("bash", [
+        DEPLOY_SCRIPT,
+        `--component=${component}`,
+        `--environment=${environment}`,
+        `--branch=${branch}`,
+      ], {
+        cwd: "/opt/ignis",
+        env: process.env,
+        encoding: "utf-8",
+      });
+
+      fullLog += result.stdout || "";
+      if (result.status !== 0) {
+        fullLog += result.stderr || "";
+        fullLog += `>>> Deployment of ${component} failed.\n`;
+      } else {
+        fullLog += `>>> Deployment of ${component} completed.\n`;
       }
     }
 
-    return createResponse(`Deployment triggered for ${changedComponents.join(", ")} in ${environment} environment`, 200)
-  } catch (error) {
-    logger.error(`Error processing webhook: ${error instanceof Error ? error.message : String(error)}`)
-    logger.logToFile(`Error processing webhook: ${error instanceof Error ? error.message : String(error)}`, "ERROR")
-    return createResponse("Error processing webhook", 500)
-  }
-}
-
-/**
- * Pure function to validate if required environment variables exist
- * @returns Boolean indicating if all requirements are met
- */
-const validateRequirements = (): boolean => {
-  const checks = [
-    { condition: !!process.env.WEBHOOK_SECRET, message: "WEBHOOK_SECRET environment variable" },
-    { condition: existsSync(CONFIG.BRIDGE_SCRIPT), message: `Bridge script at ${CONFIG.BRIDGE_SCRIPT}` },
-  ]
-
-  const failedChecks = checks.filter((check) => !check.condition)
-
-  if (failedChecks.length > 0) {
-    logger.error("Missing requirements:")
-    failedChecks.forEach((check) => logger.error(`   - ${check.message}`))
-    return false
-  }
-
-  return true
-}
-
-/**
- * Starts the webhook server
- */
-const startServer = async (): Promise<void> => {
-  if (!validateRequirements()) {
-    logger.error("Server startup aborted due to missing requirements")
-    process.exit(1)
-  }
-
-  try {
-    const serverConfig = {
-      hostname: "0.0.0.0",
-      port: CONFIG.PORT,
-      fetch: handleWebhook,
-    }
-
-    serve(serverConfig)
-
-    logger.success(`Webhook server running at http://0.0.0.0:${CONFIG.PORT}${CONFIG.WEBHOOK_PATH}`)
-    logger.logToFile(`Webhook server started on port ${CONFIG.PORT}`, "INFO")
-  } catch (error) {
-    logger.error(`Failed to start server: ${error instanceof Error ? error.message : String(error)}`)
-    process.exit(1)
-  }
-}
-
-// Start the server
-startServer().catch((error) => {
-  logger.error(`Unhandled error: ${error instanceof Error ? error.message : String(error)}`)
-  process.exit(1)
-})
+    logWebhookEvent(payload, fullLog);
+    const ok = !fullLog.includes("failed");
+    return new Response(ok ? "Deployment OK" : "Deployment partial/failure", {
+      status: ok ? 200 : 500,
+    });
+  },
+});

@@ -5,11 +5,15 @@ After=network.target
 [Service]
 ExecStart=/usr/local/bin/bun run /opt/ignis/deployments/webhook/server.ts
 WorkingDirectory=/opt/ignis
-Restart=always
+Restart=on-failure
+RestartSec=10
 User=ignis
 Environment=NODE_ENV=production
 # Load environment variables from .env file
 EnvironmentFile=/opt/ignis/.env
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ignis-webhook
 
 [Install]
 WantedBy=multi-user.target
