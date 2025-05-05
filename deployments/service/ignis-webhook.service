@@ -3,17 +3,15 @@ Description=Ignis GitHub Webhook Listener
 After=network.target
 
 [Service]
-ExecStart=/usr/local/bin/bun run /opt/ignis/deployments/webhook/server.ts
-WorkingDirectory=/opt/ignis
-Restart=on-failure
-RestartSec=10
-User=ignis
+Type=simple
+WorkingDirectory=/opt/ignis/deployments/webhook
+ExecStart=/usr/local/bin/bun run server.ts
 Environment=NODE_ENV=production
-# Load environment variables from .env file
 EnvironmentFile=/opt/ignis/.env
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=ignis-webhook
+Restart=on-failure
+RestartSec=3
+StandardOutput=append:/opt/ignis/logs/webhook/service.log
+StandardError=append:/opt/ignis/logs/webhook/service-error.log
 
 [Install]
 WantedBy=multi-user.target

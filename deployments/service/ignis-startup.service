@@ -1,15 +1,16 @@
 [Unit]
-Description=Ignis GitHub Webhook Listener
-After=network.target
+Description=Ignis System Startup
+After=network.target docker.service
+Requires=docker.service
 
 [Service]
-ExecStart=/usr/local/bin/bun run /opt/ignis/deployments/webhook/server.ts
+Type=oneshot
+ExecStart=/opt/ignis/deployments/scripts/startup.sh
 WorkingDirectory=/opt/ignis
-Restart=always
-User=ignis
-Environment=NODE_ENV=production
-# Load environment variables from .env file
 EnvironmentFile=/opt/ignis/.env
+StandardOutput=append:/opt/ignis/logs/startup/service.log
+StandardError=append:/opt/ignis/logs/startup/service-error.log
+RemainAfterExit=true
 
 [Install]
 WantedBy=multi-user.target
