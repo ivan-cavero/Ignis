@@ -346,7 +346,7 @@ deploy_full_infrastructure() {
   fi
   
   # Check if containers are running
-  local containers=("traefik" "ignis-backend" "ignis-admin-frontend" "ignis-user-frontend" "ignis-landing" "ignis-webhook")
+  local containers=("traefik" "ignis-backend" "ignis-admin-frontend" "ignis-user-frontend" "ignis-landing")
   local failed_containers=()
   
   for container in "${containers[@]}"; do
@@ -483,7 +483,6 @@ deploy_component() {
     "user-frontend") container_name="ignis-user-frontend" ;;
     "landing-frontend") container_name="ignis-landing" ;;
     "proxy") container_name="traefik" ;;
-    "webhook") container_name="ignis-webhook" ;;
   esac
   
   if [ -n "$container_name" ] && is_container_running "$container_name"; then
