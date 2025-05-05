@@ -5,13 +5,10 @@ After=network.target
 [Service]
 Type=simple
 WorkingDirectory=/opt/ignis/deployments/webhook
-ExecStart=/usr/local/bin/bun run server.ts
-Environment=NODE_ENV=production
+ExecStart=/usr/local/bin/bun server.ts >> /opt/ignis/logs/webhook/service.log 2>> /opt/ignis/logs/webhook/service-error.log
 EnvironmentFile=/opt/ignis/.env
 Restart=on-failure
 RestartSec=3
-StandardOutput=append:/opt/ignis/logs/webhook/service.log
-StandardError=append:/opt/ignis/logs/webhook/service-error.log
 
 [Install]
 WantedBy=multi-user.target
