@@ -3,13 +3,12 @@
 # This script is executed at system boot to start the Ignis infrastructure
 # 
 # Author: v0
-# Version: 2.0.0
+# Version: 3.0.0
 # License: MIT
 
 # Get the project root directory
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LOG_DIR="$PROJECT_ROOT/logs/startup"
-WEBHOOK_LOG_DIR="$PROJECT_ROOT/logs/webhook"
 WEBHOOK_DIR="$PROJECT_ROOT/deployments/webhook"
 
 # Create timestamp for log files
@@ -17,13 +16,8 @@ create_timestamp() {
   date +"%Y%m%d-%H%M%S"
 }
 
-create_date_stamp() {
-  date +"%Y%m%d"
-}
-
 # Create logs directory if it doesn't exist
 mkdir -p "$LOG_DIR"
-mkdir -p "$WEBHOOK_LOG_DIR"
 
 # Log file with timestamp
 TIMESTAMP=$(create_timestamp)
@@ -59,19 +53,12 @@ start_webhook() {
     return 1
   fi
   
-  # Check if webhook is already running - use more specific pattern and full path
-  if pgrep -f "/usr/local/bin/bun run.*server.ts" > /dev/null; then
-    log "INFO" "Webhook server is already running, skipping startup"
-    return 0
-  fi
-  
   # Kill any existing webhook processes to avoid duplicates
   pkill -f "bun run.*server.ts" || true
   sleep 1
   
-  # Get today's date for log file
-  DATE_STAMP=$(create_date_stamp)
-  WEBHOOK_LOG="$WEBHOOK_LOG_DIR/webhook-$DATE_STAMP.log"
+  # Remove lock file if it exists
+  rm -f /tmp/ignis-webhook.lock
   
   # Start webhook server in background
   cd "$WEBHOOK_DIR"
@@ -79,9 +66,8 @@ start_webhook() {
   # Start webhook server with nohup to keep it running after this script exits
   log "INFO" "Launching webhook server process"
   
-  # Use a single log file for both stdout and stderr
   # Use full path to bun to avoid PATH issues
-  nohup /usr/local/bin/bun run server.ts >> "$WEBHOOK_LOG" 2>&1 &
+  nohup /usr/local/bin/bun run server.ts &
   
   # Store the PID
   WEBHOOK_PID=$!

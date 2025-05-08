@@ -3,11 +3,10 @@
  * Listens for GitHub push events and triggers component-specific deployments
  *
  * @author v0
- * @version 2.0.0
+ * @version 3.0.0
  */
 import { serve } from "bun"
 import { spawnSync } from "child_process"
-import { createLogger } from "./logger"
 import crypto from "crypto"
 import fs from "fs"
 
@@ -17,20 +16,40 @@ const DEPLOY_SCRIPT: string = "/opt/ignis/deployments/scripts/deploy.sh"
 const LOG_DIR: string = "/opt/ignis/logs/webhook"
 const PORT: number = Number.parseInt(process.env.WEBHOOK_PORT || "3333", 10)
 
-// Debug info - write environment information at startup
-const debugInfo = {
-  cwd: process.cwd(),
-  env: {
-    NODE_ENV: process.env.NODE_ENV,
-    PATH: process.env.PATH,
-    WEBHOOK_SECRET: WEBHOOK_SECRET ? "***SET***" : "***NOT SET***",
-    BUN_VERSION: process.env.BUN_VERSION,
-  },
-  files: {
-    deployScript: fs.existsSync(DEPLOY_SCRIPT),
-    serverTs: fs.existsSync("./server.ts"),
-    logDir: fs.existsSync(LOG_DIR),
-  },
+// Create date string for log file name (YYYYMMDD format)
+const getDateString = (): string => {
+  const now = new Date()
+  const year = now.getFullYear()
+  const month = String(now.getMonth() + 1).padStart(2, "0")
+  const day = String(now.getDate()).padStart(2, "0")
+  return `${year}${month}${day}`
+}
+
+const LOG_FILE: string = `${LOG_DIR}/webhook-${getDateString()}.log`
+
+// Create log directory if it doesn't exist
+try {
+  if (!fs.existsSync(LOG_DIR)) {
+    fs.mkdirSync(LOG_DIR, { recursive: true })
+  }
+} catch (error) {
+  console.error(`Failed to create log directory: ${String(error)}`)
+}
+
+// Simple logging function
+const log = (level: string, message: string): void => {
+  const timestamp = new Date().toISOString()
+  const logMessage = `[${timestamp}] [${level}] ${message}\n`
+
+  // Log to console
+  console.log(logMessage.trim())
+
+  // Log to file
+  try {
+    fs.appendFileSync(LOG_FILE, logMessage)
+  } catch (error) {
+    console.error(`Failed to write to log file: ${String(error)}`)
+  }
 }
 
 // Component mapping
@@ -85,15 +104,8 @@ const checkLock = (): boolean => {
   }
 }
 
-// Initialize logger with console output enabled
-const logger = createLogger({
-  directory: LOG_DIR,
-  prefix: "webhook",
-  consoleOutput: true, // Enable console output for direct logging
-})
-
-// Log debug info at startup
-logger.info(`Server starting with config: ${JSON.stringify(debugInfo, null, 2)}`)
+// Log startup information
+log("INFO", `Server starting on port ${PORT}`)
 
 /**
  * Verifies the GitHub webhook signature
@@ -103,7 +115,7 @@ logger.info(`Server starting with config: ${JSON.stringify(debugInfo, null, 2)}`
  */
 const verifySignature = (body: string, signature: string): boolean => {
   if (!WEBHOOK_SECRET) {
-    logger.warning("WEBHOOK_SECRET not set - signature verification disabled")
+    log("WARNING", "WEBHOOK_SECRET not set - signature verification disabled")
     return true // For testing, allow without verification if no secret
   }
 
@@ -114,7 +126,7 @@ const verifySignature = (body: string, signature: string): boolean => {
 
     return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
   } catch (error) {
-    logger.error(`Signature verification error: ${String(error)}`)
+    log("ERROR", `Signature verification error: ${String(error)}`)
     return false
   }
 }
@@ -172,7 +184,7 @@ const extractComponents = (files: readonly string[]): string[] => {
  * @returns {boolean} Whether the deployment was successful
  */
 const deployComponent = (component: string, environment: string, branch: string): boolean => {
-  logger.info(`Deploying component: ${component}`)
+  log("INFO", `Deploying component: ${component}`)
 
   const result = spawnSync(
     "bash",
@@ -185,10 +197,10 @@ const deployComponent = (component: string, environment: string, branch: string)
   )
 
   if (result.status === 0) {
-    logger.success(`Deployment of ${component} completed`)
+    log("SUCCESS", `Deployment of ${component} completed`)
     return true
   } else {
-    logger.error(`Deployment of ${component} failed: ${result.stderr}`)
+    log("ERROR", `Deployment of ${component} failed: ${result.stderr}`)
     return false
   }
 }
@@ -229,26 +241,26 @@ const handleWebhook = (req: Request): Promise<Response> => {
 
   // Only process POST requests to /webhook endpoint
   if (req.method !== "POST" || url.pathname !== "/webhook") {
-    logger.info(`Received request to ${url.pathname} with method ${req.method}`)
+    log("INFO", `Received request to ${url.pathname} with method ${req.method}`)
     return Promise.resolve(new Response("Not found", { status: 404 }))
   }
 
   return req
     .text()
     .then((bodyText) => {
-      logger.info(`Received webhook request: ${bodyText.substring(0, 100)}...`)
+      log("INFO", `Received webhook request`)
 
       // Get signature
       const signature = req.headers.get("x-hub-signature-256") || ""
 
       // Verify signature
       if (!signature) {
-        logger.warning("No signature header found")
+        log("WARNING", "No signature header found")
         return new Response("No signature provided", { status: 403 })
       }
 
       if (!verifySignature(bodyText, signature)) {
-        logger.warning("Invalid signature received")
+        log("WARNING", "Invalid signature received")
         return new Response("Invalid signature", { status: 403 })
       }
 
@@ -257,7 +269,7 @@ const handleWebhook = (req: Request): Promise<Response> => {
       try {
         payload = JSON.parse(bodyText) as GitHubPayload
       } catch (error) {
-        logger.error(`Invalid JSON payload: ${String(error)}`)
+        log("ERROR", `Invalid JSON payload: ${String(error)}`)
         return new Response("Invalid JSON", { status: 400 })
       }
 
@@ -266,11 +278,11 @@ const handleWebhook = (req: Request): Promise<Response> => {
       const branch: string = ref.replace("refs/heads/", "")
       const validBranches: readonly string[] = ["main", "dev"]
 
-      logger.info(`Webhook for branch: ${branch}`)
+      log("INFO", `Webhook for branch: ${branch}`)
 
       // Only process valid branches
       if (!validBranches.includes(branch)) {
-        logger.info(`Ignored branch: ${branch}`)
+        log("INFO", `Ignored branch: ${branch}`)
         return new Response("Ignored branch", { status: 200 })
       }
 
@@ -284,12 +296,11 @@ const handleWebhook = (req: Request): Promise<Response> => {
       // Detect components
       const components = extractComponents(changedFiles)
 
-      logger.info(`Changed files: ${changedFiles.join(", ")}`)
-      logger.info(`Detected components: ${components.join(", ")}`)
+      log("INFO", `Changed files: ${changedFiles.length}, Detected components: ${components.join(", ")}`)
 
       // Skip deployment if no components changed
       if (components.length === 0) {
-        logger.info("No components changed")
+        log("INFO", "No components changed")
         return new Response("No deployment needed", { status: 200 })
       }
 
@@ -305,7 +316,7 @@ const handleWebhook = (req: Request): Promise<Response> => {
       }
     })
     .catch((error) => {
-      logger.error(`Unhandled error: ${String(error)}`)
+      log("ERROR", `Unhandled error: ${String(error)}`)
       return new Response(`Server error: ${String(error)}`, { status: 500 })
     })
 }
@@ -314,7 +325,7 @@ const handleWebhook = (req: Request): Promise<Response> => {
 try {
   // Check if another instance is already running
   if (checkLock()) {
-    logger.warning("Another instance is already running, exiting")
+    log("WARNING", "Another instance is already running, exiting")
     process.exit(0)
   }
 
@@ -324,7 +335,7 @@ try {
     fetch: handleWebhook,
   })
 
-  logger.info(`Webhook server started on port ${PORT}`)
+  log("INFO", `Webhook server started on port ${PORT}`)
 } catch (error) {
-  logger.error(`Failed to start server: ${String(error)}`)
+  log("ERROR", `Failed to start server: ${String(error)}`)
 }
