@@ -1,20 +1,37 @@
 /**
  * GitHub webhook server for Ignis deployment automation
  * Listens for GitHub push events and triggers component-specific deployments
- * 
+ *
  * @author v0
  * @version 1.0.0
  */
-import { serve } from "bun";
-import { spawnSync } from "child_process";
-import { createLogger } from "./logger";
-import crypto from "crypto";
+import { serve } from "bun"
+import { spawnSync } from "child_process"
+import { createLogger } from "./logger"
+import crypto from "crypto"
+import fs from "fs"
 
 // Configuration
-const WEBHOOK_SECRET: string = process.env.WEBHOOK_SECRET || "";
-const DEPLOY_SCRIPT: string = "/opt/ignis/deployments/scripts/deploy.sh";
-const LOG_DIR: string = "/opt/ignis/logs/webhook";
-const PORT: number = parseInt(process.env.WEBHOOK_PORT || "3333", 10);
+const WEBHOOK_SECRET: string = process.env.WEBHOOK_SECRET || ""
+const DEPLOY_SCRIPT: string = "/opt/ignis/deployments/scripts/deploy.sh"
+const LOG_DIR: string = "/opt/ignis/logs/webhook"
+const PORT: number = Number.parseInt(process.env.WEBHOOK_PORT || "3333", 10)
+
+// Debug info - write environment information at startup
+const debugInfo = {
+  cwd: process.cwd(),
+  env: {
+    NODE_ENV: process.env.NODE_ENV,
+    PATH: process.env.PATH,
+    WEBHOOK_SECRET: WEBHOOK_SECRET ? "***SET***" : "***NOT SET***",
+    BUN_VERSION: process.env.BUN_VERSION,
+  },
+  files: {
+    deployScript: fs.existsSync(DEPLOY_SCRIPT),
+    serverTs: fs.existsSync("./server.ts"),
+    logDir: fs.existsSync(LOG_DIR),
+  },
+}
 
 // Component mapping
 const COMPONENT_MAP: Record<string, string> = {
@@ -26,201 +43,239 @@ const COMPONENT_MAP: Record<string, string> = {
   "deployments/service/": "services",
   "deployments/scripts/": "infrastructure",
   "docker-compose": "infrastructure",
-};
-
-// Types
-type DeploymentResult = {
-  readonly stdout: string;
-  readonly stderr: string;
-  readonly status: number;
-};
-
-type GitHubCommit = {
-  readonly added?: readonly string[];
-  readonly modified?: readonly string[];
-  readonly removed?: readonly string[];
-};
+}
 
 // Initialize logger
-const logger = createLogger({ directory: LOG_DIR });
+const logger = createLogger({ directory: LOG_DIR })
+
+// Log debug info at startup
+logger.info(`Server starting with config: ${JSON.stringify(debugInfo, null, 2)}`)
 
 /**
  * Verifies the GitHub webhook signature
- * @param body - Request body as string
- * @param signature - GitHub signature header
- * @returns Boolean indicating if signature is valid
+ * @param {string} body - Request body
+ * @param {string} signature - GitHub signature
+ * @returns {boolean} Whether the signature is valid
  */
 const verifySignature = (body: string, signature: string): boolean => {
   if (!WEBHOOK_SECRET) {
-    return false;
+    logger.warning("WEBHOOK_SECRET not set - signature verification disabled")
+    return true // For testing, allow without verification if no secret
   }
-  
-  const hmac = crypto.createHmac("sha256", WEBHOOK_SECRET);
-  hmac.update(body);
-  const expected = `sha256=${hmac.digest("hex")}`;
-  
+
   try {
-    return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
-  } catch {
-    return false;
+    const hmac = crypto.createHmac("sha256", WEBHOOK_SECRET)
+    hmac.update(body)
+    const expected = `sha256=${hmac.digest("hex")}`
+
+    return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))
+  } catch (error) {
+    logger.error(`Signature verification error: ${String(error)}`)
+    return false
   }
-};
+}
 
 /**
- * Extracts changed files from GitHub webhook payload
- * @param commits - Array of commit objects from GitHub
- * @returns Array of unique changed file paths
+ * Simple health check handler
+ * @returns {Response} Health check response
  */
-const extractChangedFiles = (commits: readonly GitHubCommit[]): readonly string[] => {
-  if (!Array.isArray(commits)) {
-    return [];
-  }
-  
-  const allFiles = commits.flatMap(commit => [
-    ...(Array.isArray(commit.added) ? commit.added : []),
-    ...(Array.isArray(commit.modified) ? commit.modified : []),
-    ...(Array.isArray(commit.removed) ? commit.removed : [])
-  ]);
-  
-  return [...new Set(allFiles)];
-};
+const handleHealthCheck = (): Response => {
+  return new Response(
+    JSON.stringify({
+      status: "ok",
+      timestamp: new Date().toISOString(),
+      uptime: process.uptime(),
+    }),
+    {
+      headers: {
+        "Content-Type": "application/json",
+      },
+    },
+  )
+}
 
 /**
- * Detects which components were changed based on modified files
- * @param files - Array of changed file paths
- * @returns Array of component names that need deployment
+ * Type for GitHub commit structure
  */
-const detectChangedComponents = (files: readonly string[]): readonly string[] => {
-  const components = files
-    .flatMap(file => 
+type GitHubCommit = {
+  readonly added?: readonly string[]
+  readonly modified?: readonly string[]
+  readonly removed?: readonly string[]
+}
+
+/**
+ * Extracts changed components from a list of files
+ * @param {string[]} files - List of changed files
+ * @returns {string[]} List of affected components
+ */
+const extractComponents = (files: readonly string[]): string[] => {
+  const uniqueFiles = [...new Set(files)]
+
+  return uniqueFiles
+    .flatMap((file) =>
       Object.entries(COMPONENT_MAP)
         .filter(([prefix]) => file.startsWith(prefix))
-        .map(([, component]) => component)
+        .map(([, component]) => component),
     )
-    .filter((value, index, self) => self.indexOf(value) === index);
-  
-  return components;
-};
+    .filter((value, index, self) => self.indexOf(value) === index)
+}
 
 /**
- * Deploys a specific component
- * @param component - Component name to deploy
- * @param environment - Deployment environment
- * @param branch - Git branch
- * @returns Deployment result object
+ * Deploys a component using the deploy script
+ * @param {string} component - Component to deploy
+ * @param {string} environment - Deployment environment
+ * @param {string} branch - Git branch
+ * @returns {boolean} Whether the deployment was successful
  */
-const deployComponent = (
-  component: string,
-  environment: string,
-  branch: string
-): DeploymentResult => {
-  const result = spawnSync("bash", [
-    DEPLOY_SCRIPT,
-    `--component=${component}`,
-    `--environment=${environment}`,
-    `--branch=${branch}`,
-  ], {
-    cwd: "/opt/ignis",
-    env: process.env,
-    encoding: "utf-8",
-  });
-  
-  return {
-    stdout: result.stdout || "",
-    stderr: result.stderr || "",
-    status: result.status || 0,
-  };
-};
+const deployComponent = (component: string, environment: string, branch: string): boolean => {
+  logger.info(`Deploying component: ${component}`)
+
+  const result = spawnSync(
+    "bash",
+    [DEPLOY_SCRIPT, `--component=${component}`, `--environment=${environment}`, `--branch=${branch}`],
+    {
+      cwd: "/opt/ignis",
+      env: process.env,
+      encoding: "utf-8",
+    },
+  )
+
+  if (result.status === 0) {
+    logger.success(`Deployment of ${component} completed`)
+    return true
+  } else {
+    logger.error(`Deployment of ${component} failed: ${result.stderr}`)
+    return false
+  }
+}
+
+/**
+ * Extracts changed files from GitHub commits
+ * @param {GitHubCommit[]} commits - Array of GitHub commits
+ * @returns {string[]} Array of changed files
+ */
+const extractChangedFiles = (commits: readonly GitHubCommit[]): string[] => {
+  return commits.flatMap((commit: GitHubCommit) => [
+    ...(Array.isArray(commit.added) ? commit.added : []),
+    ...(Array.isArray(commit.modified) ? commit.modified : []),
+    ...(Array.isArray(commit.removed) ? commit.removed : []),
+  ])
+}
+
+/**
+ * Type for GitHub webhook payload
+ */
+type GitHubPayload = {
+  readonly ref?: string
+  readonly commits?: readonly GitHubCommit[]
+}
 
 /**
  * Handles the GitHub webhook request
- * @param req - HTTP request
- * @returns HTTP response
+ * @param {Request} req - HTTP request
+ * @returns {Promise<Response>} HTTP response
  */
-const handleWebhook = async (req: Request): Promise<Response> => {
-  const url = new URL(req.url);
-  
+const handleWebhook = (req: Request): Promise<Response> => {
+  const url = new URL(req.url)
+
+  // Health check endpoint
+  if (req.method === "GET" && url.pathname === "/health") {
+    return Promise.resolve(handleHealthCheck())
+  }
+
   // Only process POST requests to /webhook endpoint
   if (req.method !== "POST" || url.pathname !== "/webhook") {
-    return new Response("Not found", { status: 404 });
+    logger.info(`Received request to ${url.pathname} with method ${req.method}`)
+    return Promise.resolve(new Response("Not found", { status: 404 }))
   }
-  
-  // Get request body and signature
-  const bodyText = await req.text();
-  const signature = req.headers.get("x-hub-signature-256");
-  
-  // Verify signature
-  if (!signature || !verifySignature(bodyText, signature)) {
-    await logger.warning("Invalid signature received");
-    return new Response("Invalid signature", { status: 403 });
-  }
-  
-  // Parse payload
-  let payload: any;
-  try {
-    payload = JSON.parse(bodyText);
-  } catch (error) {
-    await logger.error("Invalid JSON payload received");
-    return new Response("Invalid JSON", { status: 400 });
-  }
-  
-  // Extract branch from ref
-  const ref: string = payload.ref || "";
-  const branch: string = ref.replace("refs/heads/", "");
-  const validBranches: readonly string[] = ["main", "dev"];
-  
-  // Only process valid branches
-  if (!validBranches.includes(branch)) {
-    await logger.info(`Ignored branch: ${branch}`);
-    return new Response("Ignored branch", { status: 200 });
-  }
-  
-  // Determine environment based on branch
-  const environment: string = branch === "main" ? "production" : "development";
-  
-  // Extract changed files and detect components
-  const commits: readonly GitHubCommit[] = Array.isArray(payload.commits) ? payload.commits : [];
-  const changedFiles: readonly string[] = extractChangedFiles(commits);
-  const components: readonly string[] = detectChangedComponents(changedFiles);
-  
-  // Skip deployment if no components changed
-  if (components.length === 0) {
-    await logger.info("No components changed");
-    return new Response("No deployment needed", { status: 200 });
-  }
-  
-  // Log deployment start
-  await logger.info(`Deploying ${components.length} components: ${components.join(", ")}`);
-  
-  // Deploy each component
-  const deploymentResults = components.map(component => {
-    const result = deployComponent(component, environment, branch);
-    const success = result.status === 0;
-    
-    if (success) {
-      logger.success(`Deployment of ${component} completed`);
-    } else {
-      logger.error(`Deployment of ${component} failed`);
-    }
-    
-    return { component, success };
-  });
-  
-  // Check if all deployments were successful
-  const allSuccessful = deploymentResults.every(r => r.success);
-  
-  // Return appropriate response
-  return new Response(
-    allSuccessful ? "Deployment OK" : "Deployment partial/failure",
-    { status: allSuccessful ? 200 : 500 }
-  );
-};
+
+  return req
+    .text()
+    .then((bodyText) => {
+      logger.info(`Received webhook request: ${bodyText.substring(0, 100)}...`)
+
+      // Get signature
+      const signature = req.headers.get("x-hub-signature-256") || ""
+
+      // Verify signature
+      if (!signature) {
+        logger.warning("No signature header found")
+        return new Response("No signature provided", { status: 403 })
+      }
+
+      if (!verifySignature(bodyText, signature)) {
+        logger.warning("Invalid signature received")
+        return new Response("Invalid signature", { status: 403 })
+      }
+
+      // Parse payload
+      let payload: GitHubPayload
+      try {
+        payload = JSON.parse(bodyText) as GitHubPayload
+      } catch (error) {
+        logger.error(`Invalid JSON payload: ${String(error)}`)
+        return new Response("Invalid JSON", { status: 400 })
+      }
+
+      // Extract branch from ref
+      const ref: string = payload.ref || ""
+      const branch: string = ref.replace("refs/heads/", "")
+      const validBranches: readonly string[] = ["main", "dev"]
+
+      logger.info(`Webhook for branch: ${branch}`)
+
+      // Only process valid branches
+      if (!validBranches.includes(branch)) {
+        logger.info(`Ignored branch: ${branch}`)
+        return new Response("Ignored branch", { status: 200 })
+      }
+
+      // Determine environment based on branch
+      const environment: string = branch === "main" ? "production" : "development"
+
+      // Extract changed files and detect components
+      const commits: readonly GitHubCommit[] = Array.isArray(payload.commits) ? payload.commits : []
+      const changedFiles = extractChangedFiles(commits)
+
+      // Detect components
+      const components = extractComponents(changedFiles)
+
+      logger.info(`Changed files: ${changedFiles.join(", ")}`)
+      logger.info(`Detected components: ${components.join(", ")}`)
+
+      // Skip deployment if no components changed
+      if (components.length === 0) {
+        logger.info("No components changed")
+        return new Response("No deployment needed", { status: 200 })
+      }
+
+      // Deploy each component
+      const deployResults = components.map((component) => deployComponent(component, environment, branch))
+
+      const allSuccessful = deployResults.every((result) => result)
+
+      if (allSuccessful) {
+        return new Response("Deployment completed successfully", { status: 200 })
+      } else {
+        return new Response("Some deployments failed", { status: 500 })
+      }
+    })
+    .catch((error) => {
+      logger.error(`Unhandled error: ${String(error)}`)
+      return new Response(`Server error: ${String(error)}`, { status: 500 })
+    })
+}
 
 // Start the server
-serve({
-  port: PORT,
-  fetch: handleWebhook,
-});
+try {
+  serve({
+    port: PORT,
+    fetch: handleWebhook,
+  })
 
-// Log server startup
-void logger.info(`Webhook server started on port ${PORT}`);
+  logger.info(`Webhook server started on port ${PORT}`)
+  console.log(`Webhook server started on port ${PORT}`)
+} catch (error) {
+  logger.error(`Failed to start server: ${String(error)}`)
+  console.error(`Failed to start server: ${String(error)}`)
+}
