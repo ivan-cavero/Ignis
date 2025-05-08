@@ -3,22 +3,31 @@ http:
     webhook:
       rule: "Host(`webhook.ivancavero.com`)"
       entryPoints:
-        - "websecure"
-      service: "webhook"
+        - websecure
+      service: webhook
       tls:
-        certResolver: "letsencrypt"
+        certResolver: letsencrypt
       middlewares:
-        - "webhook-retry"
-        - "webhook-timeout"
+        - webhook-retry
+        - webhook-timeout
+
+    webhook-http:
+      rule: "Host(`webhook.ivancavero.com`)"
+      entryPoints:
+        - web
+      middlewares:
+        - redirect-to-https@file
+      service: noop@internal
 
   middlewares:
     webhook-retry:
       retry:
         attempts: 3
         initialInterval: "500ms"
+
     webhook-timeout:
-      forwardingTimeouts:
-        responseTimeout: 60s
+      timeout:
+        response: 60s
 
   services:
     webhook:
