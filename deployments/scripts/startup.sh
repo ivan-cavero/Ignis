@@ -442,6 +442,41 @@ generate_summary() {
   fi
 }
 
+# Check and fix acme.json file
+check_acme_file() {
+  log_info "Checking acme.json file"
+  
+  local acme_file="$PROJECT_ROOT/proxy/acme.json"
+  
+  # Check if acme.json exists
+  if [ ! -e "$acme_file" ]; then
+    log_info "acme.json does not exist, creating it"
+    touch "$acme_file"
+    chmod 600 "$acme_file"
+    log_success "Created acme.json file"
+    return 0
+  fi
+  
+  # Check if acme.json is a directory (the issue)
+  if [ -d "$acme_file" ]; then
+    log_warning "acme.json is a directory instead of a file, fixing..."
+    rm -rf "$acme_file"
+    touch "$acme_file"
+    chmod 600 "$acme_file"
+    log_success "Fixed acme.json (converted from directory to file)"
+    return 0
+  fi
+  
+  # Check permissions
+  if [ "$(stat -c %a "$acme_file")" != "600" ]; then
+    log_warning "acme.json has incorrect permissions, fixing..."
+    chmod 600 "$acme_file"
+    log_success "Fixed acme.json permissions"
+  else
+    log_success "acme.json exists with correct permissions"
+  fi
+}
+
 # === MAIN FUNCTION ===
 
 main() {
@@ -490,6 +525,9 @@ main() {
   
   # Verify Docker-to-host communication
   verify_docker_host_communication
+  
+  # Check and fix acme.json file
+  check_acme_file
   
   # Start Docker infrastructure
   start_docker

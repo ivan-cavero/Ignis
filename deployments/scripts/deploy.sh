@@ -385,9 +385,20 @@ check_acme_file() {
   # Check if acme.json is a directory (the issue)
   if [ -d "$acme_file" ]; then
     log_warning "acme.json is a directory instead of a file, fixing..."
+    
+    # Stop Traefik first to release the mount
+    if docker ps | grep -q traefik; then
+      log_info "Stopping Traefik container to fix mount issue"
+      docker stop traefik
+    fi
+    
+    # Remove the directory
     rm -rf "$acme_file"
+    
+    # Create the file with proper permissions
     touch "$acme_file"
     chmod 600 "$acme_file"
+    
     log_success "Fixed acme.json (converted from directory to file)"
     return 0
   fi

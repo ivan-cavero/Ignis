@@ -948,11 +948,19 @@ setup_project() {
   mkdir -p "$INSTALLATION_DIR/deployments/service"
   
   # Create acme.json file if it doesn't exist
-  if [ ! -f "$INSTALLATION_DIR/proxy/acme.json" ]; then
+  if [ ! -e "$INSTALLATION_DIR/proxy/acme.json" ]; then
     print_message "$COLOR_INFO" "Creating acme.json file for Let's Encrypt certificates..."
+    # Ensure it's created as a file, not a directory
     touch "$INSTALLATION_DIR/proxy/acme.json"
     chmod 600 "$INSTALLATION_DIR/proxy/acme.json"
     print_success "Created acme.json file with proper permissions"
+  elif [ -d "$INSTALLATION_DIR/proxy/acme.json" ]; then
+    # If it exists as a directory, fix it
+    print_warning "acme.json exists as a directory instead of a file, fixing..."
+    rm -rf "$INSTALLATION_DIR/proxy/acme.json"
+    touch "$INSTALLATION_DIR/proxy/acme.json"
+    chmod 600 "$INSTALLATION_DIR/proxy/acme.json"
+    print_success "Fixed acme.json (converted from directory to file)"
   fi
 
   # Create .env file if it doesn't exist
