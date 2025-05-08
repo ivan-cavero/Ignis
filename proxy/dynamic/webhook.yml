@@ -28,7 +28,7 @@ http:
     webhook:
       loadBalancer:
         servers:
-          - url: "http://host.docker.internal:3333"
+          - url: "http://172.17.0.1:3333"
         passHostHeader: true
         healthCheck:
           path: "/health"
