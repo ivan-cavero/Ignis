@@ -234,7 +234,7 @@ type GitHubPayload = {
  */
 const handleWebhook = (req: Request): Promise<Response> => {
   const url = new URL(req.url)
-  
+
   log("INFO", `Received request to ${url.pathname} with method ${req.method}`)
 
   // Health check endpoint
@@ -333,7 +333,7 @@ try {
   }
 
   // Start the server
-  serve({
+   serve({
     port: PORT,
     hostname: HOST,
     fetch: handleWebhook,
