@@ -1,16 +1,37 @@
 [Unit]
-Description=Ignis System Startup
-After=network.target docker.service
+Description=Ignis System Startup Service
+Documentation=https://github.com/ivan-cavero/Ignis
+After=network-online.target docker.service
 Requires=docker.service
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=3
 
 [Service]
 Type=oneshot
-ExecStart=/opt/ignis/deployments/scripts/startup.sh
+User=ignis
+Group=ignis
 WorkingDirectory=/opt/ignis
+ExecStart=/opt/ignis/deployments/scripts/startup.sh
 EnvironmentFile=/opt/ignis/.env
 StandardOutput=append:/opt/ignis/logs/startup/service.log
 StandardError=append:/opt/ignis/logs/startup/service-error.log
 RemainAfterExit=true
+TimeoutStartSec=180
+TimeoutStopSec=30
+
+# Security hardening
+PrivateTmp=true
+ProtectSystem=full
+NoNewPrivileges=true
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=multi-user.target

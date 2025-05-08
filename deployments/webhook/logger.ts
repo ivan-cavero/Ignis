@@ -1,155 +1,111 @@
 /**
- * Functional logger module for Ignis webhook service
- * Provides pure functions for logging with consistent timestamp format
+ * Simple functional logger for Ignis webhook service
+ * 
+ * @author v0
+ * @version 1.0.0
  */
 import { writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 
 /**
- * Log level type definition
- */
-type LogLevel = "INFO" | "SUCCESS" | "WARNING" | "ERROR";
-
-/**
- * Log entry structure
- */
-type LogEntry = {
-  readonly timestamp: string;
-  readonly level: LogLevel;
-  readonly message: string;
-};
-
-/**
- * Configuration for the logger
+ * Logger configuration type
  */
 type LoggerConfig = {
   readonly directory: string;
 };
 
 /**
- * Creates a timestamp string in the format used across Ignis
+ * Log level type
+ */
+type LogLevel = "INFO" | "SUCCESS" | "WARNING" | "ERROR";
+
+/**
+ * Logger interface
+ */
+interface Logger {
+  info: (message: string) => Promise<string>;
+  success: (message: string) => Promise<string>;
+  warning: (message: string) => Promise<string>;
+  error: (message: string) => Promise<string>;
+}
+
+/**
+ * Creates a timestamp string
  * @returns Formatted timestamp string
  */
-const createTimestamp = (): string => 
-  new Date().toISOString().replace("T", " ").split(".")[0];
+const createTimestamp = (): string => {
+  const now = new Date();
+  
+  // Format date manually using individual components
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  const hours = String(now.getHours()).padStart(2, "0");
+  const minutes = String(now.getMinutes()).padStart(2, "0");
+  const seconds = String(now.getSeconds()).padStart(2, "0");
+  
+  // Format: "YYYY-MM-DD HH:MM:SS"
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+};
 
 /**
- * Creates a log entry with the current timestamp
- * @param level - Log level
- * @param message - Log message
- * @returns Structured log entry
- */
-const createLogEntry = (level: LogLevel, message: string): LogEntry => ({
-  timestamp: createTimestamp(),
-  level,
-  message,
-});
-
-/**
- * Formats a log entry as a string
- * @param entry - Log entry to format
- * @returns Formatted log string
- */
-const formatLogEntry = (entry: LogEntry): string => 
-  `[${entry.timestamp}] [${entry.level}] ${entry.message}`;
-
-/**
- * Creates a filename for the log based on current date
- * @returns Log filename
+ * Creates a log filename
+ * @returns Log filename with timestamp
  */
 const createLogFilename = (): string => {
   const now = new Date();
-  const datePart = [
-    now.getFullYear(),
-    String(now.getMonth() + 1).padStart(2, "0"),
-    String(now.getDate()).padStart(2, "0"),
-  ].join("");
-  
-  const timePart = [
-    String(now.getHours()).padStart(2, "0"),
-    String(now.getMinutes()).padStart(2, "0"),
-    String(now.getSeconds()).padStart(2, "0"),
-  ].join("");
-  
-  return `webhook-${datePart}-${timePart}.log`;
+  const date = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
+  const time = `${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
+  return `webhook-${date}-${time}.log`;
 };
 
 /**
- * Ensures the log directory exists
- * @param config - Logger configuration
- * @returns Promise resolving to the directory path
+ * Formats a log message
+ * @param level - Log level
+ * @param message - Log message
+ * @returns Formatted log message
  */
-const ensureLogDirectory = async (config: LoggerConfig): Promise<string> => {
-  await mkdir(config.directory, { recursive: true });
-  return config.directory;
-};
-
-/**
- * Writes a log entry to a file
- * @param config - Logger configuration
- * @param entry - Log entry to write
- * @param additionalContent - Optional additional content to append
- * @returns Promise resolving to the path of the written file
- */
-const writeLogToFile = async (
-  config: LoggerConfig,
-  entry: LogEntry,
-  additionalContent?: string
-): Promise<string> => {
-  const directory = await ensureLogDirectory(config);
-  const filename = createLogFilename();
-  const filepath = join(directory, filename);
-  
-  const content = [
-    formatLogEntry(entry),
-    additionalContent ? `\n\n--- ADDITIONAL DATA ---\n${additionalContent}` : "",
-  ].join("");
-  
-  await writeFile(filepath, content);
-  console.log(formatLogEntry(entry));
-  
-  return filepath;
-};
+const formatLogMessage = (level: LogLevel, message: string): string => 
+  `[${createTimestamp()}] [${level}] ${message}`;
 
 /**
  * Creates a logger with the specified configuration
  * @param config - Logger configuration
- * @returns Object with logging functions
+ * @returns Logger object with logging functions
  */
-export const createLogger = (config: LoggerConfig) => ({
+export const createLogger = (config: LoggerConfig): Logger => {
   /**
-   * Logs an informational message
-   * @param message - Message to log
-   * @param additionalContent - Optional additional content
-   * @returns Promise resolving to the path of the written file
+   * Ensures the log directory exists
+   * @returns Promise resolving to the directory path
    */
-  info: (message: string, additionalContent?: string): Promise<string> => 
-    writeLogToFile(config, createLogEntry("INFO", message), additionalContent),
+  const ensureLogDirectory = async (): Promise<string> => {
+    await mkdir(config.directory, { recursive: true });
+    return config.directory;
+  };
   
   /**
-   * Logs a success message
-   * @param message - Message to log
-   * @param additionalContent - Optional additional content
-   * @returns Promise resolving to the path of the written file
+   * Writes a log message to file
+   * @param level - Log level
+   * @param message - Log message
+   * @returns Promise resolving to the file path
    */
-  success: (message: string, additionalContent?: string): Promise<string> => 
-    writeLogToFile(config, createLogEntry("SUCCESS", message), additionalContent),
+  const writeLog = async (level: LogLevel, message: string): Promise<string> => {
+    const directory = await ensureLogDirectory();
+    const filename = createLogFilename();
+    const filepath = join(directory, filename);
+    const formattedMessage = formatLogMessage(level, message);
+    
+    console.log(formattedMessage);
+    
+    await writeFile(filepath, formattedMessage + "\n", { flag: "a" });
+    return filepath;
+  };
   
-  /**
-   * Logs a warning message
-   * @param message - Message to log
-   * @param additionalContent - Optional additional content
-   * @returns Promise resolving to the path of the written file
-   */
-  warning: (message: string, additionalContent?: string): Promise<string> => 
-    writeLogToFile(config, createLogEntry("WARNING", message), additionalContent),
-  
-  /**
-   * Logs an error message
-   * @param message - Message to log
-   * @param additionalContent - Optional additional content
-   * @returns Promise resolving to the path of the written file
-   */
-  error: (message: string, additionalContent?: string): Promise<string> => 
-    writeLogToFile(config, createLogEntry("ERROR", message), additionalContent),
-});
+  // Return logger functions
+  return {
+    info: (message: string): Promise<string> => writeLog("INFO", message),
+    success: (message: string): Promise<string> => writeLog("SUCCESS", message),
+    warning: (message: string): Promise<string> => writeLog("WARNING", message),
+    error: (message: string): Promise<string> => writeLog("ERROR", message),
+  };
+};

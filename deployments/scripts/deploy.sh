@@ -1,201 +1,331 @@
 #!/bin/bash
+# Ignis Deployment System
+# Simple, functional deployment script for Ignis ERP
+#
+# Author: v0
+# Version: 1.0.0
+# License: MIT
 
-# === CONFIGURACION GENERAL ===
+# === CONFIGURATION ===
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LOG_DIR="$PROJECT_ROOT/logs/deployments"
-LOG_FILE="$LOG_DIR/deploy-$(date +%Y%m%d-%H%M%S).log"
-
 ENVIRONMENT="production"
 BRANCH="main"
 COMPONENT=""
 FORCE_REBUILD=false
 EXTRACT_CERTS=true
-LOG_TO_FILE=true
 
-# === FUNCIONES DE LOG ===
+# === HELPER FUNCTIONS ===
+
+# Print formatted message
 log() {
-  local level="$1"
-  local message="$2"
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $message" | tee -a "$LOG_FILE"
+  local timestamp="$(date "+%Y-%m-%d %H:%M:%S")"
+  echo "[${timestamp}] [$1] $2"
 }
 
+# Show help message
+show_help() {
+  cat << EOF
+Ignis Deployment Script
+
+USAGE:
+  ./deploy.sh [OPTIONS]
+
+OPTIONS:
+  --component=NAME       Deploy specific component:
+                         backend, user-frontend, admin-frontend, 
+                         landing-frontend, proxy, services, infrastructure
+  
+  --environment=ENV      Set deployment environment (production, development)
+                         Default: production
+  
+  --branch=BRANCH        Set Git branch to deploy
+                         Default: main
+  
+  --force-rebuild        Force rebuild of Docker containers
+  
+  --no-extract-certs     Skip SSL certificate extraction
+  
+  --help                 Show this help message
+
+EXAMPLES:
+  # Deploy everything
+  ./deploy.sh
+  
+  # Deploy only backend in development environment
+  ./deploy.sh --component=backend --environment=development
+  
+  # Deploy services (systemd services)
+  ./deploy.sh --component=services
+  
+  # Force rebuild of all containers
+  ./deploy.sh --force-rebuild
+EOF
+}
+
+# Check if a command exists
 command_exists() {
-  command -v "$1" &> /dev/null
+  command -v "$1" >/dev/null 2>&1
 }
 
-is_container_running() {
-  docker ps -q -f name="$1" | grep -q .
+# Check if a file exists
+file_exists() {
+  [ -f "$1" ]
 }
 
-# === FUNCIONES DE PREPARACION ===
-initialize_log_file() {
-  if [ "$LOG_TO_FILE" = true ]; then
-    mkdir -p "$LOG_DIR"
-    echo "=== IGNIS DEPLOYMENT LOG - $(date) ===" > "$LOG_FILE"
-    log "INFO" "Logging to file: $LOG_FILE"
-  fi
+# Check if a directory exists
+dir_exists() {
+  [ -d "$1" ]
 }
 
-check_prerequisites() {
-  log "INFO" "Checking prerequisites"
-  local missing=()
-
-  command_exists docker || missing+=("Docker")
-  (command_exists docker-compose || docker compose version &> /dev/null) || missing+=("Docker Compose")
-  [ -d "$PROJECT_ROOT" ] || missing+=("Project directory")
-  [ -f "$PROJECT_ROOT/docker-compose.yml" ] || missing+=("docker-compose.yml")
-
-  if [ ${#missing[@]} -gt 0 ]; then
-    log "ERROR" "Missing: ${missing[*]}"
-    return 1
-  fi
-
-  log "SUCCESS" "All prerequisites met"
-  return 0
+# Check if two files are different
+files_differ() {
+  ! cmp -s "$1" "$2"
 }
 
-update_environment_variables() {
-  local env="$1"
-  log "INFO" "Updating .env"
+# === DEPLOYMENT FUNCTIONS ===
+
+# Update environment variables
+update_environment() {
+  log "INFO" "Updating environment variables for $ENVIRONMENT"
+  
   local env_file="$PROJECT_ROOT/.env"
-
-  grep -q "WEBHOOK_SECRET=" "$env_file" 2>/dev/null || echo "WEBHOOK_SECRET=ignis_webhook_secret_$(date +%s | sha256sum | base64 | head -c 32)" >> "$env_file"
-
-  if [ "$env" = "development" ]; then
-    sed -i "s/ENVIRONMENT=.*/ENVIRONMENT=development/" "$env_file" 2>/dev/null || echo "ENVIRONMENT=development" >> "$env_file"
-  else
-    sed -i "s/ENVIRONMENT=.*/ENVIRONMENT=production/" "$env_file" 2>/dev/null || echo "ENVIRONMENT=production" >> "$env_file"
+  
+  # Ensure webhook secret exists
+  if ! grep -q "WEBHOOK_SECRET=" "$env_file" 2>/dev/null; then
+    local secret="ignis_webhook_secret_$(date +%s | sha256sum | base64 | head -c 32)"
+    echo "WEBHOOK_SECRET=$secret" >> "$env_file"
   fi
-  log "SUCCESS" ".env updated"
+  
+  # Update environment setting
+  if grep -q "ENVIRONMENT=" "$env_file" 2>/dev/null; then
+    sed -i "s/ENVIRONMENT=.*/ENVIRONMENT=$ENVIRONMENT/" "$env_file"
+  else
+    echo "ENVIRONMENT=$ENVIRONMENT" >> "$env_file"
+  fi
+  
+  log "SUCCESS" "Environment variables updated"
 }
 
+# Extract SSL certificates
 extract_certificates() {
-  [ "$EXTRACT_CERTS" != true ] && return 0
-  local script="$PROJECT_ROOT/deployments/scripts/extract-certs.sh"
-  [ -f "$script" ] && bash "$script"
-}
-
-register_systemd_services() {
-  log "INFO" "Registering systemd services"
-  local SERVICE_DIR="$PROJECT_ROOT/deployments/service"
-  local SYSTEMD_DIR="/etc/systemd/system"
-  local SERVICES=("ignis-startup.service" "ignis-webhook.service")
-  local updated=false
-
-  for s in "${SERVICES[@]}"; do
-    local src="$SERVICE_DIR/$s"
-    local dst="$SYSTEMD_DIR/$s"
-    if [ ! -f "$src" ]; then
-      log "WARNING" "$src not found"
-      continue
-    fi
-    if ! cmp -s "$src" "$dst"; then
-      cp "$src" "$dst"
-      updated=true
-      log "INFO" "Copied updated $s"
-    fi
-    systemctl enable "$s"
-  done
-
-  [ "$updated" = true ] && systemctl daemon-reexec
-  log "SUCCESS" "Systemd services enabled"
-}
-
-# === DESPLIEGUES ===
-deploy_full_infrastructure() {
-  local env="$1"
-  log "INFO" "Deploying full infrastructure for $env"
-
-  cd "$PROJECT_ROOT"
-  mkdir -p "$PROJECT_ROOT/proxy/certs" "$PROJECT_ROOT/logs/webhook" "$PROJECT_ROOT/logs/deployments"
-  [ -f "$PROJECT_ROOT/proxy/acme.json" ] || { touch "$PROJECT_ROOT/proxy/acme.json" && chmod 600 "$PROJECT_ROOT/proxy/acme.json"; }
-
-  update_environment_variables "$env"
-  [ -d "$PROJECT_ROOT/.git" ] && git checkout "$BRANCH" && git pull origin "$BRANCH"
-
-  local compose_file="docker-compose.yml"
-  local env_file=""
-  [ "$env" = "development" ] && env_file="docker-compose.development.yml" || env_file="docker-compose.production.yml"
-
-  if [ "$FORCE_REBUILD" = true ]; then
-    docker compose -f "$compose_file"${env_file:+ -f "$env_file"} down
-    docker compose -f "$compose_file"${env_file:+ -f "$env_file"} up -d --build
-  else
-    docker compose -f "$compose_file"${env_file:+ -f "$env_file"} up -d
+  if [ "$EXTRACT_CERTS" != true ]; then
+    return 0
   fi
-
-  register_systemd_services
-  deploy_component "webhook" "$env" "$BRANCH"
-
-  log "SUCCESS" "Full infrastructure deployed"
+  
+  local script="$PROJECT_ROOT/deployments/scripts/extract-certs.sh"
+  if [ -f "$script" ]; then
+    log "INFO" "Extracting SSL certificates"
+    bash "$script"
+  fi
 }
 
-deploy_component() {
-  local component="$1"; local env="$2"; local branch="$3"
-  log "INFO" "Deploying component: $component"
+# Deploy systemd services
+deploy_services() {
+  log "INFO" "Deploying systemd services"
+  
+  local service_dir="$PROJECT_ROOT/deployments/service"
+  local updated=false
+  
+  if ! dir_exists "$service_dir"; then
+    log "WARNING" "Service directory not found: $service_dir"
+    return 0
+  fi
+  
+  # Find all service files
+  local service_files=()
+  while IFS= read -r -d '' file; do
+    service_files+=("$file")
+  done < <(find "$service_dir" -name "*.service" -type f -print0)
+  
+  if [ ${#service_files[@]} -eq 0 ]; then
+    log "INFO" "No service files found"
+    return 0
+  fi
+  
+  # Process each service file
+  for src in "${service_files[@]}"; do
+    local service_name="$(basename "$src" .service)"
+    local dst="/etc/systemd/system/${service_name}.service"
+    
+    if [ ! -f "$dst" ] || files_differ "$src" "$dst"; then
+      log "INFO" "Updating service: $service_name"
+      sudo cp "$src" "$dst"
+      updated=true
+      
+      # Enable and restart the service
+      sudo systemctl enable "$service_name"
+      sudo systemctl restart "$service_name"
+    fi
+  done
+  
+  if [ "$updated" = true ]; then
+    log "INFO" "Reloading systemd daemon"
+    sudo systemctl daemon-reload
+  fi
+  
+  log "SUCCESS" "Services deployed"
+}
 
+# Deploy a specific component
+deploy_component() {
+  local component="$1"
+  
+  log "INFO" "Deploying component: $component"
+  
   case "$component" in
     backend|admin-frontend|user-frontend|landing-frontend|proxy)
-      docker compose up -d --build "$component"
-      ;;
-    webhook)
-      [ -d "$PROJECT_ROOT/.git" ] && git checkout "$branch" && git pull origin "$branch"
-      if command_exists bun && [ -f "$PROJECT_ROOT/deployments/webhook/server.ts" ]; then
-        cd "$PROJECT_ROOT/deployments/webhook" && bun install
-        systemctl daemon-reexec
-        systemctl restart ignis-webhook.service
-        systemctl status ignis-webhook.service --no-pager >> "$LOG_FILE"
-        log "SUCCESS" "Webhook service restarted"
+      cd "$PROJECT_ROOT"
+      if [ "$FORCE_REBUILD" = true ]; then
+        docker compose up -d --build "$component"
       else
-        log "ERROR" "Cannot deploy webhook"
-        return 1
+        docker compose up -d "$component"
       fi
       ;;
-    infrastructure)
-      deploy_full_infrastructure "$env"
-      return $?
+      
+    services)
+      deploy_services
       ;;
+      
+    infrastructure)
+      deploy_infrastructure
+      ;;
+      
     *)
       log "ERROR" "Unknown component: $component"
       return 1
       ;;
   esac
-  return 0
+  
+  log "SUCCESS" "Component $component deployed"
 }
 
+# Deploy full infrastructure
+deploy_infrastructure() {
+  log "INFO" "Deploying full infrastructure"
+  
+  cd "$PROJECT_ROOT"
+  
+  # Create required directories
+  mkdir -p "$PROJECT_ROOT/proxy/certs" "$PROJECT_ROOT/logs/webhook" "$PROJECT_ROOT/logs/deployments"
+  
+  # Create acme.json if it doesn't exist
+  if [ ! -f "$PROJECT_ROOT/proxy/acme.json" ]; then
+    touch "$PROJECT_ROOT/proxy/acme.json"
+    chmod 600 "$PROJECT_ROOT/proxy/acme.json"
+  fi
+  
+  # Update environment variables
+  update_environment
+  
+  # Pull latest changes if git repository exists
+  if [ -d "$PROJECT_ROOT/.git" ]; then
+    log "INFO" "Pulling latest changes from git"
+    git checkout "$BRANCH" && git pull origin "$BRANCH"
+  fi
+  
+  # Determine compose file
+  local compose_file="docker-compose.yml"
+  local env_file=""
+  
+  if [ "$ENVIRONMENT" = "development" ]; then
+    env_file="docker-compose.development.yml"
+  else
+    env_file="docker-compose.yml"
+  fi
+  
+  # Start or restart containers
+  log "INFO" "Starting Docker infrastructure"
+  
+  if [ "$FORCE_REBUILD" = true ]; then
+    log "INFO" "Forcing rebuild of all containers"
+    docker compose -f "$compose_file" ${env_file:+ -f "$env_file"} down
+    docker compose -f "$compose_file" ${env_file:+ -f "$env_file"} up -d --build
+  else
+    docker compose -f "$compose_file" ${env_file:+ -f "$env_file"} up -d
+  fi
+  
+  # Deploy services
+  deploy_services
+  
+  log "SUCCESS" "Infrastructure deployed"
+}
+
+# Generate deployment summary
 generate_summary() {
-  log "INFO" "Generating deployment summary"
+  log "INFO" "Deployment summary"
+  
   echo "--- Docker Status ---"
   docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep "ignis\|traefik"
+  
+  echo "--- Service Status ---"
+  systemctl list-units --type=service --all | grep "ignis"
 }
 
-parse_arguments() {
-  while [[ $# -gt 0 ]]; do
-    case $1 in
-      --component=*) COMPONENT="${1#*=}" ; shift ;;
-      --environment=*) ENVIRONMENT="${1#*=}" ; shift ;;
-      --branch=*) BRANCH="${1#*=}" ; shift ;;
-      --force-rebuild) FORCE_REBUILD=true ; shift ;;
-      --no-extract-certs) EXTRACT_CERTS=false ; shift ;;
-      *) log "WARNING" "Unknown option: $1" ; shift ;;
-    esac
-  done
-}
+# === MAIN FUNCTION ===
 
-# === MAIN ===
-main() {
-  parse_arguments "$@"
-  initialize_log_file
-  check_prerequisites || exit 1
+# Parse arguments
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --component=*)
+      COMPONENT="${1#*=}"
+      shift
+      ;;
+    --environment=*)
+      ENVIRONMENT="${1#*=}"
+      shift
+      ;;
+    --branch=*)
+      BRANCH="${1#*=}"
+      shift
+      ;;
+    --force-rebuild)
+      FORCE_REBUILD=true
+      shift
+      ;;
+    --no-extract-certs)
+      EXTRACT_CERTS=false
+      shift
+      ;;
+    --help)
+      show_help
+      exit 0
+      ;;
+    *)
+      log "WARNING" "Unknown option: $1"
+      shift
+      ;;
+  esac
+done
 
-  if [ -n "$COMPONENT" ]; then
-    deploy_component "$COMPONENT" "$ENVIRONMENT" "$BRANCH" || exit 1
-  else
-    deploy_full_infrastructure "$ENVIRONMENT" || log "WARNING" "Partial infra deploy"
-  fi
+# Create log directory
+mkdir -p "$LOG_DIR"
 
-  extract_certificates
-  generate_summary
-}
+# Log file with timestamp
+LOG_FILE="$LOG_DIR/deploy-$(date +%Y%m%d-%H%M%S).log"
+exec > >(tee -a "$LOG_FILE") 2>&1
 
-main "$@"
+log "INFO" "Starting deployment"
+
+# Check prerequisites
+log "INFO" "Checking prerequisites"
+if ! command_exists docker || ! (command_exists docker-compose || docker compose version &> /dev/null); then
+  log "ERROR" "Docker or Docker Compose not found"
+  exit 1
+fi
+
+# Deploy component or full infrastructure
+if [ -n "$COMPONENT" ]; then
+  deploy_component "$COMPONENT"
+else
+  deploy_infrastructure
+fi
+
+# Extract certificates if enabled
+extract_certificates
+
+# Generate summary
+generate_summary
+
+log "SUCCESS" "Deployment completed"
+echo "Log file: $LOG_FILE"

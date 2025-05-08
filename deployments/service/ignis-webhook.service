@@ -1,14 +1,35 @@
 [Unit]
 Description=Ignis GitHub Webhook Listener
 After=network.target
+Requires=docker.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
 
 [Service]
 Type=simple
+User=ignis
 WorkingDirectory=/opt/ignis/deployments/webhook
-ExecStart=/usr/local/bin/bun server.ts >> /opt/ignis/logs/webhook/service.log 2>> /opt/ignis/logs/webhook/service-error.log
+ExecStart=/usr/local/bin/bun run server.ts
+StandardOutput=append:/opt/ignis/logs/webhook/service.log
+StandardError=append:/opt/ignis/logs/webhook/service-error.log
 EnvironmentFile=/opt/ignis/.env
 Restart=on-failure
-RestartSec=3
+RestartSec=10
+TimeoutStartSec=30
+TimeoutStopSec=30
+
+# Security hardening
+PrivateTmp=true
+ProtectSystem=full
+NoNewPrivileges=true
+ProtectHome=true
+ProtectControlGroups=true
+ProtectKernelModules=true
+ProtectKernelTunables=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=true
+RestrictRealtime=true
+SystemCallArchitectures=native
 
 [Install]
 WantedBy=multi-user.target
