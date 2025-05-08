@@ -45,6 +45,46 @@ const COMPONENT_MAP: Record<string, string> = {
   "docker-compose": "infrastructure",
 }
 
+// Create a lock file to prevent multiple instances
+const LOCK_FILE = "/tmp/ignis-webhook.lock"
+
+// Check if another instance is running
+const checkLock = (): boolean => {
+  try {
+    // Check if lock file exists
+    if (fs.existsSync(LOCK_FILE)) {
+      const pid = fs.readFileSync(LOCK_FILE, "utf-8").trim()
+
+      // Check if process with PID is still running
+      try {
+        process.kill(Number(pid), 0)
+        // Process exists, another instance is running
+        return true
+      } catch (e) {
+        // Process doesn't exist, stale lock file
+        fs.unlinkSync(LOCK_FILE)
+      }
+    }
+
+    // Create lock file with current PID
+    fs.writeFileSync(LOCK_FILE, process.pid.toString())
+
+    // Register cleanup on exit
+    process.on("exit", () => {
+      try {
+        fs.unlinkSync(LOCK_FILE)
+      } catch (e) {
+        // Ignore errors during cleanup
+      }
+    })
+
+    return false
+  } catch (e) {
+    // Error checking lock, assume no lock
+    return false
+  }
+}
+
 // Initialize logger with console output enabled
 const logger = createLogger({
   directory: LOG_DIR,
@@ -272,23 +312,19 @@ const handleWebhook = (req: Request): Promise<Response> => {
 
 // Start the server
 try {
-  // Check if server is already running on this port
-  try {
-    const server = serve({
-      port: PORT,
-      fetch: handleWebhook,
-    })
-
-    logger.info(`Webhook server started on port ${PORT}`)
-  } catch (error) {
-    if (String(error).includes("EADDRINUSE")) {
-      logger.warning(`Port ${PORT} already in use, another instance may be running`)
-      // Exit gracefully
-      process.exit(0)
-    } else {
-      throw error
-    }
+  // Check if another instance is already running
+  if (checkLock()) {
+    logger.warning("Another instance is already running, exiting")
+    process.exit(0)
   }
+
+  // Start the server
+  const server = serve({
+    port: PORT,
+    fetch: handleWebhook,
+  })
+
+  logger.info(`Webhook server started on port ${PORT}`)
 } catch (error) {
   logger.error(`Failed to start server: ${String(error)}`)
 }

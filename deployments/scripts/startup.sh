@@ -59,11 +59,15 @@ start_webhook() {
     return 1
   fi
   
-  # Check if webhook is already running - use more specific pattern
-  if pgrep -f "bun run.*server.ts" > /dev/null; then
+  # Check if webhook is already running - use more specific pattern and full path
+  if pgrep -f "/usr/local/bin/bun run.*server.ts" > /dev/null; then
     log "INFO" "Webhook server is already running, skipping startup"
     return 0
   fi
+  
+  # Kill any existing webhook processes to avoid duplicates
+  pkill -f "bun run.*server.ts" || true
+  sleep 1
   
   # Get today's date for log file
   DATE_STAMP=$(create_date_stamp)
@@ -76,11 +80,16 @@ start_webhook() {
   log "INFO" "Launching webhook server process"
   
   # Use a single log file for both stdout and stderr
-  nohup bun run server.ts >> "$WEBHOOK_LOG" 2>&1 &
+  # Use full path to bun to avoid PATH issues
+  nohup /usr/local/bin/bun run server.ts >> "$WEBHOOK_LOG" 2>&1 &
+  
+  # Store the PID
+  WEBHOOK_PID=$!
+  log "INFO" "Webhook server started with PID: $WEBHOOK_PID"
   
   # Check if webhook started successfully - wait a bit longer
   sleep 3
-  if pgrep -f "bun run.*server.ts" > /dev/null; then
+  if kill -0 $WEBHOOK_PID 2>/dev/null; then
     log "SUCCESS" "Webhook server started successfully"
     return 0
   else
