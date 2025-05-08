@@ -7,9 +7,6 @@
 # Version: 3.2.0
 # License: MIT
 
-# Exit on any error
-set -e
-
 # ==================== CONFIGURATION ====================
 # Colors for output
 readonly COLOR_RESET="\033[0m"
@@ -20,12 +17,12 @@ readonly COLOR_ERROR="\033[1;31m"   # Red
 readonly COLOR_TITLE="\033[1;35m"   # Magenta
 
 # Default settings (can be overridden by command line arguments)
-readonly SSH_PORT=49622                                      # Secure non-standard port
-readonly INSTALLATION_DIR="/opt/ignis"                       # Default installation directory
-readonly GIT_REPO="https://github.com/ivan-cavero/Ignis.git" # Git repository URL
-readonly GIT_BRANCH="main"                                   # Default branch
-readonly SETUP_USER="ignis"                                  # Default system user
-readonly LOG_FILE="ignis-setup.log"                          # Log file name
+SSH_PORT=49622                                      # Secure non-standard port
+INSTALLATION_DIR="/opt/ignis"                       # Default installation directory
+GIT_REPO="https://github.com/ivan-cavero/Ignis.git" # Git repository URL
+GIT_BRANCH="main"                                   # Default branch
+SETUP_USER="ignis"                                  # Default system user
+LOG_FILE="ignis-setup.log"                          # Log file name
 
 # Port configurations - format: "port/protocol|comment"
 readonly ALLOWED_PORTS=(
@@ -46,6 +43,8 @@ ALLOW_PASSWORD_AUTH=true                                    # Allow password aut
 ALLOW_TCP_FORWARDING=true                                   # Allow TCP forwarding for remote development
 USE_IPTABLES=false                                          # Use iptables instead of ufw
 LOG_TO_FILE=false                                           # Write logs to file
+INSTALL_SERVICES=true                                       # Install systemd services
+START_SERVICES=true                                         # Start services after installation
 
 # Required packages by category
 readonly SYSTEM_PACKAGES="curl ca-certificates gnupg unzip git software-properties-common jq"
@@ -180,6 +179,12 @@ parse_arguments() {
       --log-to-file)
         LOG_TO_FILE=true
         ;;
+      --no-install-services)
+        INSTALL_SERVICES=false
+        ;;
+      --no-start-services)
+        START_SERVICES=false
+        ;;
       --help)
         show_help
         exit 0
@@ -206,7 +211,7 @@ Options:
 --dir=PATH            Set installation directory (default: /opt/ignis)
 --repo=URL            Set Git repository URL
 --branch=BRANCH       Set Git branch (default: main)
---user=USERNAME       Set system user (default: dev)
+--user=USERNAME       Set system user (default: ignis)
 --log-file=FILE       Set log file name (default: ignis-setup.log)
 --no-ssh              Skip SSH security configuration
 --no-docker           Skip Docker installation
@@ -218,6 +223,8 @@ Options:
 --no-tcp-forwarding   Disable TCP forwarding (will break VS Code Remote)
 --use-iptables        Use iptables instead of ufw for firewall
 --log-to-file         Write logs to file
+--no-install-services Skip installation of systemd services
+--no-start-services   Skip starting services after installation
 --help                Show this help message
 
 Example:
@@ -237,7 +244,7 @@ initialize_log_file() {
 
 # Update system packages
 update_system() {
-  print_section "1" "11" "Updating system packages"
+  print_section "1" "12" "Updating system packages"
 
   if [ "$UPDATE_SYSTEM" = true ]; then
     print_message "$COLOR_INFO" "Updating package lists..."
@@ -254,7 +261,7 @@ update_system() {
 
 # Install required packages
 install_base_packages() {
-  print_section "2" "11" "Installing base packages"
+  print_section "2" "12" "Installing base packages"
 
   print_message "$COLOR_INFO" "Installing system packages..."
   
@@ -281,7 +288,7 @@ install_base_packages() {
 
 # Create system user
 create_system_user() {
-  print_section "3" "11" "Setting up system user"
+  print_section "3" "12" "Setting up system user"
 
   local user_created=false
 
@@ -324,7 +331,7 @@ create_system_user() {
 
 # Install NVM and Node.js
 install_node() {
-  print_section "4" "11" "Installing NVM and Node.js LTS"
+  print_section "4" "12" "Installing NVM and Node.js LTS"
 
   # Determine the correct home directory
   local USER_HOME
@@ -381,7 +388,7 @@ install_node() {
 
 # Install Bun
 install_bun() {
-  print_section "5" "11" "Installing Bun"
+  print_section "5" "12" "Installing Bun"
 
   # Determine the correct home directory
   local USER_HOME
@@ -431,10 +438,9 @@ install_bun() {
   fi
 }
 
-
 # Install Java
 install_java() {
-  print_section "6" "11" "Installing Java"
+  print_section "6" "12" "Installing Java"
 
   if [ "$SETUP_JAVA" != true ]; then
     print_message "$COLOR_INFO" "Skipping Java installation (--no-java flag provided)"
@@ -462,7 +468,7 @@ install_java() {
 
 # Configure firewall
 configure_firewall() {
-  print_section "7" "11" "Configuring firewall"
+  print_section "7" "12" "Configuring firewall"
 
   if [ "$USE_IPTABLES" = true ]; then
     configure_iptables
@@ -559,6 +565,10 @@ configure_iptables() {
     sudo iptables -A INPUT -p "$protocol" --dport "$port" -j ACCEPT
   done
 
+  # Allow Docker bridge network to communicate with host
+  sudo iptables -I INPUT -i docker0 -j ACCEPT
+  print_message "$COLOR_SUCCESS" "Added iptables rule for Docker bridge"
+
   # Save rules
   sudo netfilter-persistent save
 
@@ -567,7 +577,7 @@ configure_iptables() {
 
 # Configure Fail2Ban
 configure_fail2ban() {
-  print_section "8" "11" "Configuring Fail2Ban"
+  print_section "8" "12" "Configuring Fail2Ban"
 
   if [ "$SETUP_FAIL2BAN" != true ]; then
     print_message "$COLOR_INFO" "Skipping Fail2Ban configuration (--no-fail2ban flag provided)"
@@ -667,14 +677,14 @@ EOF
 [Definition]
 failregex = ^%(__prefix_line)s(?:error: PAM: )?Authentication failure for .* from <HOST>( via \S+)?\s*$
           ^%(__prefix_line)s(?:error: PAM: )?User not known to the underlying authentication module for .* from <HOST>\s*$
-          ^%(__prefix_line)sFailed \S+ for invalid user .* from <HOST>(?: port \d+)?(?: ssh\d*)?(: (ruser .*|(\S+ ID \S+ $$serial \d+$$ CA )?\S+ %(__md5hex)s(, client user ".*", client host ".*")?))?\s*$
-          ^%(__prefix_line)sFailed \S+ for .* from <HOST>(?: port \d+)?(?: ssh\d*)?(: (ruser .*|(\S+ ID \S+ $$serial \d+$$ CA )?\S+ %(__md5hex)s(, client user ".*", client host ".*")?))?\s*$
+          ^%(__prefix_line)sFailed \S+ for invalid user .* from <HOST>(?: port \d+)?(?: ssh\d*)?(: (ruser .*|(\S+ ID \S+ \$serial \d+\$ CA )?\S+ %(__md5hex)s(, client user ".*", client host ".*")?))?\s*$
+          ^%(__prefix_line)sFailed \S+ for .* from <HOST>(?: port \d+)?(?: ssh\d*)?(: (ruser .*|(\S+ ID \S+ \$serial \d+\$ CA )?\S+ %(__md5hex)s(, client user ".*", client host ".*")?))?\s*$
           ^%(__prefix_line)sROOT LOGIN REFUSED.* FROM <HOST>\s*$
           ^%(__prefix_line)s[iI](?:llegal|nvalid) user .* from <HOST>\s*$
           ^%(__prefix_line)sUser .+ from <HOST> not allowed because not listed in AllowUsers\s*$
           ^%(__prefix_line)sUser .+ from <HOST> not allowed because listed in DenyUsers\s*$
           ^%(__prefix_line)sUser .+ from <HOST> not allowed because not in any group\s*$
-          ^%(__prefix_line)srefused connect from \S+ $$<HOST>$$\s*$
+          ^%(__prefix_line)srefused connect from \S+ \$<HOST>\$\s*$
           ^%(__prefix_line)sReceived disconnect from <HOST>: 3: \S+: Auth fail$
           ^%(__prefix_line)sUser .+ from <HOST> not allowed because a group is listed in DenyGroups\s*$
           ^%(__prefix_line)sUser .+ from <HOST> not allowed because none of user's groups are listed in AllowGroups\s*$
@@ -737,7 +747,7 @@ EOF
 
 # Configure SSH security
 configure_ssh_security() {
-  print_section "9" "11" "Configuring SSH security"
+  print_section "9" "12" "Configuring SSH security"
 
   if [ "$SETUP_SSH" != true ]; then
     print_message "$COLOR_INFO" "Skipping SSH configuration (--no-ssh flag provided)"
@@ -806,7 +816,7 @@ EOF
 
 # Install Docker
 install_docker() {
-  print_section "10" "11" "Installing Docker"
+  print_section "10" "12" "Installing Docker"
 
   if [ "$SETUP_DOCKER" != true ]; then
     print_message "$COLOR_INFO" "Skipping Docker installation (--no-docker flag provided)"
@@ -843,8 +853,30 @@ install_docker() {
   # Add user to docker group
   sudo usermod -aG docker "$SETUP_USER"
 
+  # Configure Docker daemon
+  sudo mkdir -p /etc/docker
+  echo '{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  },
+  "features": {
+    "buildkit": true
+  },
+  "experimental": false
+}' | sudo tee /etc/docker/daemon.json > /dev/null
+
+  # Configure Docker to host communication
+  # Add host.docker.internal DNS entry to /etc/hosts if not already present
+  if ! grep -q "host.docker.internal" /etc/hosts; then
+    print_message "$COLOR_INFO" "Adding host.docker.internal to /etc/hosts..."
+    echo "172.17.0.1 host.docker.internal" | sudo tee -a /etc/hosts > /dev/null
+  fi
+
   # Ensure Docker starts on boot
   sudo systemctl enable docker
+  sudo systemctl restart docker
 
   print_success "Docker installed"
   print_warning "Docker group permissions require a session restart to take effect"
@@ -867,7 +899,7 @@ install_docker() {
 
 # Clone repository and set up project
 setup_project() {
-  print_section "11" "11" "Setting up Ignis project"
+  print_section "11" "12" "Setting up Ignis project"
 
   # Create installation directory if it doesn't exist
   if [ ! -d "$INSTALLATION_DIR" ]; then
@@ -918,6 +950,9 @@ setup_project() {
   if [ ! -f "$INSTALLATION_DIR/.env" ]; then
     print_message "$COLOR_INFO" "Creating template .env file..."
     echo "WEBHOOK_SECRET=ignis_webhook_secret_$(date +%s | sha256sum | base64 | head -c 32)" > "$INSTALLATION_DIR/.env"
+    echo "ENVIRONMENT=production" >> "$INSTALLATION_DIR/.env"
+    echo "WEBHOOK_PORT=3333" >> "$INSTALLATION_DIR/.env"
+    echo "WEBHOOK_HOST=0.0.0.0" >> "$INSTALLATION_DIR/.env"
     print_success "Created .env file with a random WEBHOOK_SECRET"
   fi
 
@@ -934,6 +969,61 @@ setup_project() {
   fi
 
   print_success "Ignis project setup completed"
+}
+
+# Install and configure services
+install_services() {
+  print_section "12" "12" "Installing and configuring services"
+
+  if [ "$INSTALL_SERVICES" != true ]; then
+    print_message "$COLOR_INFO" "Skipping service installation (--no-install-services flag provided)"
+    return
+  fi
+
+  # Find all service files
+  local service_dir="$INSTALLATION_DIR/deployments/service"
+  
+  if [ -d "$service_dir" ]; then
+    print_message "$COLOR_INFO" "Installing systemd services..."
+    
+    # Process each service file
+    find "$service_dir" -name "*.service" -type f | while read -r src; do
+      local service_name
+      service_name=$(basename "$src" .service)
+      local dst="/etc/systemd/system/${service_name}.service"
+      
+      print_message "$COLOR_INFO" "Installing service: $service_name"
+      sudo cp "$src" "$dst"
+      sudo systemctl daemon-reload
+      sudo systemctl enable "$service_name"
+    done
+    
+    # Start services if requested
+    if [ "$START_SERVICES" = true ]; then
+      print_message "$COLOR_INFO" "Starting services..."
+      
+      # Start ignis-startup service which should handle other services
+      if systemctl list-unit-files | grep -q "ignis-startup.service"; then
+        sudo systemctl start ignis-startup.service
+        print_success "Started ignis-startup service"
+      else
+        # Start each service individually if ignis-startup doesn't exist
+        find "$service_dir" -name "*.service" -type f | while read -r src; do
+          local service_name
+          service_name=$(basename "$src" .service)
+          print_message "$COLOR_INFO" "Starting service: $service_name"
+          sudo systemctl start "$service_name"
+        done
+      fi
+    else
+      print_message "$COLOR_INFO" "Skipping service startup (--no-start-services flag provided)"
+      print_message "$COLOR_INFO" "You can start services manually with: sudo systemctl start ignis-startup.service"
+    fi
+  else
+    print_warning "Service directory not found: $service_dir"
+  fi
+  
+  print_success "Services installed and configured"
 }
 
 # Generate system summary
@@ -975,6 +1065,14 @@ generate_summary() {
   # Check services
   echo -e "${COLOR_INFO}Services Status:${COLOR_RESET}"
   echo -e "  Docker: $(systemctl is-active docker 2>/dev/null || echo "not installed")"
+  
+  # Check installed Ignis services
+  if [ -d "/etc/systemd/system" ]; then
+    echo -e "  Ignis Services:"
+    systemctl list-units --type=service --all | grep "ignis" | while read -r line; do
+      echo -e "    $line"
+    done
+  fi
 
   # Check Fail2Ban status
   if [ "$SETUP_FAIL2BAN" = true ]; then
@@ -1007,6 +1105,7 @@ generate_summary() {
   echo -e "  System User: $SETUP_USER"
   echo -e "  SSH Port: $SSH_PORT"
   echo -e "  Password Authentication: $([ "$ALLOW_PASSWORD_AUTH" = true ] && echo "Enabled" || echo "Disabled")"
+  echo -e "  TCP Forwarding: $([ "$ALLOW_TCP_FORWARDING" = true ] && echo "Enabled" || echo "Disabled")"
   echo -e "  Logging to File: $([ "$LOG_TO_FILE" = true ] && echo "Enabled ($LOG_FILE)" || echo "Disabled")"
 
   # Docker permissions reminder
@@ -1029,7 +1128,10 @@ generate_summary() {
     echo -e "  2. SSH access command: ssh $SETUP_USER@your-server -p $SSH_PORT"
   fi
   echo -e "  3. Configure GitHub webhooks to point to your server: https://your-server:3333/webhook"
-  echo -e "  4. Run the webhook setup script to configure the webhook service"
+  
+  if [ "$START_SERVICES" != true ]; then
+    echo -e "  4. Start services manually: sudo systemctl start ignis-startup.service"
+  fi
 
   print_message "$COLOR_TITLE" "=== SETUP COMPLETE ==="
 }
@@ -1057,6 +1159,7 @@ main() {
   configure_ssh_security
   install_docker
   setup_project
+  install_services
 
   # Generate summary
   generate_summary
