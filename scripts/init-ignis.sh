@@ -403,9 +403,23 @@ install_bun() {
     fi
     
     # Create global symlink for bun
+    print_message "$COLOR_INFO" "Creating global symlink for Bun..."
     sudo ln -sf "$USER_HOME/.bun/bin/bun" /usr/local/bin/bun
   else
     print_success "Bun is already installed: $(bun --version)"
+    
+    # Check if symlink exists and points to the correct location
+    if [ -L "/usr/local/bin/bun" ]; then
+      LINK_TARGET=$(readlink -f /usr/local/bin/bun)
+      if [ "$LINK_TARGET" != "$USER_HOME/.bun/bin/bun" ]; then
+        print_message "$COLOR_INFO" "Updating Bun symlink..."
+        sudo rm -f /usr/local/bin/bun
+        sudo ln -sf "$USER_HOME/.bun/bin/bun" /usr/local/bin/bun
+      fi
+    else
+      print_message "$COLOR_INFO" "Creating global symlink for Bun..."
+      sudo ln -sf "$USER_HOME/.bun/bin/bun" /usr/local/bin/bun
+    fi
   fi
 
   # Verify Bun installation
@@ -416,6 +430,7 @@ install_bun() {
     exit 1
   fi
 }
+
 
 # Install Java
 install_java() {

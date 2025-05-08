@@ -12,14 +12,13 @@ User=ignis
 Group=ignis
 WorkingDirectory=/opt/ignis
 ExecStart=/bin/bash /opt/ignis/deployments/scripts/startup.sh
-StandardOutput=file:/opt/ignis/logs/startup/startup-$(date +\%Y\%m\%d-\%H\%M\%S).log
-StandardError=file:/opt/ignis/logs/startup/startup-error-$(date +\%Y\%m\%d-\%H\%M\%S).log
+StandardOutput=append:/opt/ignis/logs/startup/startup-$(date +\%Y\%m\%d).log
+StandardError=append:/opt/ignis/logs/startup/startup-error-$(date +\%Y\%m\%d).log
 EnvironmentFile=/opt/ignis/.env
 RemainAfterExit=true
 TimeoutStartSec=180
 TimeoutStopSec=30
 
-# Security hardening (menos restrictivo)
 PrivateTmp=true
 NoNewPrivileges=true
 

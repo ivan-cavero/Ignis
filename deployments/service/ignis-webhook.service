@@ -10,9 +10,9 @@ Type=simple
 User=ignis
 Group=ignis
 WorkingDirectory=/opt/ignis/deployments/webhook
-ExecStart=/bin/bash -c '/usr/local/bin/bun run server.ts'
-StandardOutput=file:/opt/ignis/logs/webhook/webhook-$(date +\%Y\%m\%d-\%H\%M\%S).log
-StandardError=file:/opt/ignis/logs/webhook/webhook-error-$(date +\%Y\%m\%d-\%H\%M\%S).log
+ExecStart=/usr/local/bin/bun run server.ts
+StandardOutput=append:/opt/ignis/logs/webhook/webhook-$(date +\%Y\%m\%d).log
+StandardError=append:/opt/ignis/logs/webhook/webhook-error-$(date +\%Y\%m\%d).log
 EnvironmentFile=/opt/ignis/.env
 Restart=on-failure
 RestartSec=10
@@ -21,7 +21,6 @@ TimeoutStopSec=30
 
 PrivateTmp=true
 NoNewPrivileges=true
-RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
 [Install]
 WantedBy=multi-user.target
