@@ -58,6 +58,12 @@ start_webhook() {
     return 1
   fi
   
+  # Check if webhook is already running - use more specific pattern
+  if pgrep -f "bun run.*server.ts" > /dev/null; then
+    log "INFO" "Webhook server is already running, skipping startup"
+    return 0
+  fi
+  
   # Get today's date for log file
   DATE_STAMP=$(create_date_stamp)
   WEBHOOK_LOG="$WEBHOOK_LOG_DIR/webhook-$DATE_STAMP.log"
@@ -66,18 +72,13 @@ start_webhook() {
   # Start webhook server in background
   cd "$WEBHOOK_DIR"
   
-  # Check if webhook is already running
-  if pgrep -f "bun run server.ts" > /dev/null; then
-    log "INFO" "Webhook server is already running"
-    return 0
-  fi
-  
   # Start webhook server with nohup to keep it running after this script exits
+  log "INFO" "Launching webhook server process"
   nohup bun run server.ts >> "$WEBHOOK_LOG" 2>> "$WEBHOOK_ERROR_LOG" &
   
-  # Check if webhook started successfully
-  sleep 2
-  if pgrep -f "bun run server.ts" > /dev/null; then
+  # Check if webhook started successfully - wait a bit longer
+  sleep 3
+  if pgrep -f "bun run.*server.ts" > /dev/null; then
     log "SUCCESS" "Webhook server started successfully"
     return 0
   else

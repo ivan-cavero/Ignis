@@ -271,7 +271,7 @@ const handleWebhook = (req: Request): Promise<Response> => {
 
 // Start the server
 try {
-  const server = serve({
+  serve({
     port: PORT,
     fetch: handleWebhook,
   })

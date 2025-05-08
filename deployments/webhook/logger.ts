@@ -13,7 +13,7 @@ import path from "path"
  */
 type LoggerConfig = {
   readonly directory: string
-  readonly prefix?: string  // Optional prefix for log messages
+  readonly prefix?: string // Optional prefix for log messages
 }
 
 /**
@@ -82,6 +82,12 @@ const ensureDirectory = (directory: string): Promise<string> =>
  * @returns {string} Formatted log message
  */
 const formatLogMessage = (level: LogLevel, message: string, prefix?: string): string => {
+  // Verificar si el mensaje ya tiene un timestamp ISO
+  if (message.match(/^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{3}Z\]/)) {
+    // El mensaje ya tiene formato, evitar duplicación
+    return message + "\n"
+  }
+  
   const timestamp = new Date().toISOString()
   const prefixStr = prefix ? `[${prefix}] ` : ""
   return `[${timestamp}] [${level}] ${prefixStr}${message}\n`
