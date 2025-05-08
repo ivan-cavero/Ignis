@@ -32,6 +32,6 @@ http:
         passHostHeader: true
         healthCheck:
           path: "/health"
-          interval: "10s"
+          interval: "120s"
           timeout: "5s"
           port: 3333
