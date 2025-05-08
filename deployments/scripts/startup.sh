@@ -44,19 +44,19 @@ start_webhook() {
   if [ ! -d "$WEBHOOK_DIR" ]; then
     log "ERROR" "Webhook directory not found: $WEBHOOK_DIR"
     return 1
-  }
+  fi
   
   # Check if server.ts exists
   if [ ! -f "$WEBHOOK_DIR/server.ts" ]; then
     log "ERROR" "Webhook server file not found: $WEBHOOK_DIR/server.ts"
     return 1
-  }
+  fi
   
   # Check if bun is installed
   if ! command -v bun &> /dev/null; then
     log "ERROR" "Bun is not installed or not in PATH"
     return 1
-  }
+  fi
   
   # Get today's date for log file
   DATE_STAMP=$(create_date_stamp)
