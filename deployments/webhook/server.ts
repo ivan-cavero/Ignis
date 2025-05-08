@@ -330,12 +330,10 @@ try {
   }
 
   // Start the server
-  const server = serve({
+  serve({
     port: PORT,
     fetch: handleWebhook,
   })
-
-  log("INFO", `Webhook server started on port ${PORT}`)
 } catch (error) {
   log("ERROR", `Failed to start server: ${String(error)}`)
 }
