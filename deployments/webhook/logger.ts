@@ -49,14 +49,15 @@ const createTimestamp = (): string => {
 };
 
 /**
- * Creates a log filename
+ * Creates a log filename with timestamp
+ * @param level - Log level for the filename
  * @returns Log filename with timestamp
  */
-const createLogFilename = (): string => {
+const createLogFilename = (level: LogLevel): string => {
   const now = new Date();
   const date = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
-  const time = `${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
-  return `webhook-${date}-${time}.log`;
+  const time = `${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`;
+  return `webhook-${level.toLowerCase()}-${date}-${time}.log`;
 };
 
 /**
@@ -91,7 +92,7 @@ export const createLogger = (config: LoggerConfig): Logger => {
    */
   const writeLog = async (level: LogLevel, message: string): Promise<string> => {
     const directory = await ensureLogDirectory();
-    const filename = createLogFilename();
+    const filename = createLogFilename(level);
     const filepath = join(directory, filename);
     const formattedMessage = formatLogMessage(level, message);
     
