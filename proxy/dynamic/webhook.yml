@@ -12,5 +12,5 @@ http:
     webhook:
       loadBalancer:
         servers:
-          - url: "http://127.0.0.1:3333"
+          - url: "http://172.17.0.1:3333"  # IP host Docker
         passHostHeader: true

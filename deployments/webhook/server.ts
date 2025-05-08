@@ -15,7 +15,7 @@ const WEBHOOK_SECRET: string = process.env.WEBHOOK_SECRET || ""
 const DEPLOY_SCRIPT: string = "/opt/ignis/deployments/scripts/deploy.sh"
 const LOG_DIR: string = "/opt/ignis/logs/webhook"
 const PORT: number = Number.parseInt(process.env.WEBHOOK_PORT || "3333", 10)
-const HOST: string = process.env.WEBHOOK_HOST || "127.0.0.1" // Escuchar solo en localhost por defecto
+const HOST: string = "0.0.0.0" // Escuchar en todas las interfaces
 
 // Create date string for log file name (YYYYMMDD format)
 const getDateString = (): string => {
@@ -106,7 +106,7 @@ const checkLock = (): boolean => {
 }
 
 // Log startup information
-log("INFO", `Server starting on port ${PORT}`)
+log("INFO", `Server starting on ${HOST}:${PORT}`)
 
 /**
  * Verifies the GitHub webhook signature
@@ -234,92 +234,94 @@ type GitHubPayload = {
  */
 const handleWebhook = (req: Request): Promise<Response> => {
   const url = new URL(req.url)
+  
+  log("INFO", `Received request to ${url.pathname} with method ${req.method}`)
 
   // Health check endpoint
   if (req.method === "GET" && url.pathname === "/health") {
     return Promise.resolve(handleHealthCheck())
   }
 
-  // Only process POST requests to /webhook endpoint or root path
-  if (req.method !== "POST" || (url.pathname !== "/webhook" && url.pathname !== "/")) {
-    log("INFO", `Received request to ${url.pathname} with method ${req.method}`)
-    return Promise.resolve(new Response("Not found", { status: 404 }))
+  // Root path handler for GitHub webhook
+  if (req.method === "POST" && (url.pathname === "/" || url.pathname === "/webhook")) {
+    return req
+      .text()
+      .then((bodyText) => {
+        log("INFO", `Received webhook request to ${url.pathname}`)
+
+        // Get signature
+        const signature = req.headers.get("x-hub-signature-256") || ""
+
+        // Verify signature
+        if (!signature) {
+          log("WARNING", "No signature header found")
+          return new Response("No signature provided", { status: 403 })
+        }
+
+        if (!verifySignature(bodyText, signature)) {
+          log("WARNING", "Invalid signature received")
+          return new Response("Invalid signature", { status: 403 })
+        }
+
+        // Parse payload
+        let payload: GitHubPayload
+        try {
+          payload = JSON.parse(bodyText) as GitHubPayload
+        } catch (error) {
+          log("ERROR", `Invalid JSON payload: ${String(error)}`)
+          return new Response("Invalid JSON", { status: 400 })
+        }
+
+        // Extract branch from ref
+        const ref: string = payload.ref || ""
+        const branch: string = ref.replace("refs/heads/", "")
+        const validBranches: readonly string[] = ["main", "dev"]
+
+        log("INFO", `Webhook for branch: ${branch}`)
+
+        // Only process valid branches
+        if (!validBranches.includes(branch)) {
+          log("INFO", `Ignored branch: ${branch}`)
+          return new Response("Ignored branch", { status: 200 })
+        }
+
+        // Determine environment based on branch
+        const environment: string = branch === "main" ? "production" : "development"
+
+        // Extract changed files and detect components
+        const commits: readonly GitHubCommit[] = Array.isArray(payload.commits) ? payload.commits : []
+        const changedFiles = extractChangedFiles(commits)
+
+        // Detect components
+        const components = extractComponents(changedFiles)
+
+        log("INFO", `Changed files: ${changedFiles.length}, Detected components: ${components.join(", ")}`)
+
+        // Skip deployment if no components changed
+        if (components.length === 0) {
+          log("INFO", "No components changed")
+          return new Response("No deployment needed", { status: 200 })
+        }
+
+        // Deploy each component
+        const deployResults = components.map((component) => deployComponent(component, environment, branch))
+
+        const allSuccessful = deployResults.every((result) => result)
+
+        if (allSuccessful) {
+          return new Response("Deployment completed successfully", { status: 200 })
+        } else {
+          return new Response("Some deployments failed", { status: 500 })
+        }
+      })
+      .catch((error) => {
+        log("ERROR", `Unhandled error: ${String(error)}`)
+        return new Response(`Server error: ${String(error)}`, { status: 500 })
+      })
   }
 
-  return req
-    .text()
-    .then((bodyText) => {
-      log("INFO", `Received webhook request`)
-
-      // Get signature
-      const signature = req.headers.get("x-hub-signature-256") || ""
-
-      // Verify signature
-      if (!signature) {
-        log("WARNING", "No signature header found")
-        return new Response("No signature provided", { status: 403 })
-      }
-
-      if (!verifySignature(bodyText, signature)) {
-        log("WARNING", "Invalid signature received")
-        return new Response("Invalid signature", { status: 403 })
-      }
-
-      // Parse payload
-      let payload: GitHubPayload
-      try {
-        payload = JSON.parse(bodyText) as GitHubPayload
-      } catch (error) {
-        log("ERROR", `Invalid JSON payload: ${String(error)}`)
-        return new Response("Invalid JSON", { status: 400 })
-      }
-
-      // Extract branch from ref
-      const ref: string = payload.ref || ""
-      const branch: string = ref.replace("refs/heads/", "")
-      const validBranches: readonly string[] = ["main", "dev"]
-
-      log("INFO", `Webhook for branch: ${branch}`)
-
-      // Only process valid branches
-      if (!validBranches.includes(branch)) {
-        log("INFO", `Ignored branch: ${branch}`)
-        return new Response("Ignored branch", { status: 200 })
-      }
-
-      // Determine environment based on branch
-      const environment: string = branch === "main" ? "production" : "development"
-
-      // Extract changed files and detect components
-      const commits: readonly GitHubCommit[] = Array.isArray(payload.commits) ? payload.commits : []
-      const changedFiles = extractChangedFiles(commits)
-
-      // Detect components
-      const components = extractComponents(changedFiles)
-
-      log("INFO", `Changed files: ${changedFiles.length}, Detected components: ${components.join(", ")}`)
-
-      // Skip deployment if no components changed
-      if (components.length === 0) {
-        log("INFO", "No components changed")
-        return new Response("No deployment needed", { status: 200 })
-      }
-
-      // Deploy each component
-      const deployResults = components.map((component) => deployComponent(component, environment, branch))
-
-      const allSuccessful = deployResults.every((result) => result)
-
-      if (allSuccessful) {
-        return new Response("Deployment completed successfully", { status: 200 })
-      } else {
-        return new Response("Some deployments failed", { status: 500 })
-      }
-    })
-    .catch((error) => {
-      log("ERROR", `Unhandled error: ${String(error)}`)
-      return new Response(`Server error: ${String(error)}`, { status: 500 })
-    })
+  // Default response for other paths
+  return Promise.resolve(new Response("Not found", { status: 404 }))
 }
 
 // Start the server
@@ -333,7 +335,7 @@ try {
   // Start the server
   serve({
     port: PORT,
-    hostname: "127.0.0.1",
+    hostname: HOST,
     fetch: handleWebhook,
   })
 

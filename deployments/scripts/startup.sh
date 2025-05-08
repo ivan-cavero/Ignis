@@ -63,6 +63,10 @@ start_webhook() {
   # Start webhook server in background
   cd "$WEBHOOK_DIR"
   
+  # Set environment variables for the webhook server
+  export WEBHOOK_HOST="0.0.0.0"
+  export WEBHOOK_PORT="3333"
+  
   # Start webhook server with nohup to keep it running after this script exits
   log "INFO" "Launching webhook server process"
   
