@@ -33,7 +33,8 @@ LOG_FILE="$LOG_DIR/startup-$TIMESTAMP.log"
 log() {
   local level="$1"
   local message="$2"
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$level] $message" | tee -a "$LOG_FILE"
+  local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%S.%3NZ")
+  echo "[$timestamp] [$level] $message" | tee -a "$LOG_FILE"
 }
 
 # Start webhook server
@@ -67,14 +68,15 @@ start_webhook() {
   # Get today's date for log file
   DATE_STAMP=$(create_date_stamp)
   WEBHOOK_LOG="$WEBHOOK_LOG_DIR/webhook-$DATE_STAMP.log"
-  WEBHOOK_ERROR_LOG="$WEBHOOK_LOG_DIR/webhook-error-$DATE_STAMP.log"
   
   # Start webhook server in background
   cd "$WEBHOOK_DIR"
   
   # Start webhook server with nohup to keep it running after this script exits
   log "INFO" "Launching webhook server process"
-  nohup bun run server.ts >> "$WEBHOOK_LOG" 2>> "$WEBHOOK_ERROR_LOG" &
+  
+  # Use a single log file for both stdout and stderr
+  nohup bun run server.ts >> "$WEBHOOK_LOG" 2>&1 &
   
   # Check if webhook started successfully - wait a bit longer
   sleep 3

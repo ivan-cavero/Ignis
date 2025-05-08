@@ -14,6 +14,7 @@ import path from "path"
 type LoggerConfig = {
   readonly directory: string
   readonly prefix?: string // Optional prefix for log messages
+  readonly consoleOutput?: boolean // Whether to output to console
 }
 
 /**
@@ -82,12 +83,6 @@ const ensureDirectory = (directory: string): Promise<string> =>
  * @returns {string} Formatted log message
  */
 const formatLogMessage = (level: LogLevel, message: string, prefix?: string): string => {
-  // Verificar si el mensaje ya tiene un timestamp ISO
-  if (message.match(/^\[\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}.\d{3}Z\]/)) {
-    // El mensaje ya tiene formato, evitar duplicación
-    return message + "\n"
-  }
-  
   const timestamp = new Date().toISOString()
   const prefixStr = prefix ? `[${prefix}] ` : ""
   return `[${timestamp}] [${level}] ${prefixStr}${message}\n`
@@ -125,7 +120,7 @@ const writeToFile = (level: LogLevel, message: string, directory: string, prefix
  * @returns {Object} Logger functions
  */
 export const createLogger = (config: LoggerConfig) => {
-  const { directory, prefix } = config
+  const { directory, prefix, consoleOutput = true } = config
 
   /**
    * Logs an info message
@@ -133,7 +128,11 @@ export const createLogger = (config: LoggerConfig) => {
    * @returns {Promise<string>} The logged message
    */
   const info = (message: string): Promise<string> => {
-    console.log(`${prefix ? `[${prefix}] ` : ""}[INFO] ${message}`)
+    // Only output to console if enabled
+    if (consoleOutput) {
+      const formattedConsoleMsg = formatLogMessage("INFO", message, prefix).trim()
+      console.log(formattedConsoleMsg)
+    }
     return writeToFile("INFO", message, directory, prefix)
   }
 
@@ -143,7 +142,11 @@ export const createLogger = (config: LoggerConfig) => {
    * @returns {Promise<string>} The logged message
    */
   const success = (message: string): Promise<string> => {
-    console.log(`${prefix ? `[${prefix}] ` : ""}[SUCCESS] ${message}`)
+    // Only output to console if enabled
+    if (consoleOutput) {
+      const formattedConsoleMsg = formatLogMessage("SUCCESS", message, prefix).trim()
+      console.log(formattedConsoleMsg)
+    }
     return writeToFile("SUCCESS", message, directory, prefix)
   }
 
@@ -153,7 +156,11 @@ export const createLogger = (config: LoggerConfig) => {
    * @returns {Promise<string>} The logged message
    */
   const warning = (message: string): Promise<string> => {
-    console.warn(`${prefix ? `[${prefix}] ` : ""}[WARNING] ${message}`)
+    // Only output to console if enabled
+    if (consoleOutput) {
+      const formattedConsoleMsg = formatLogMessage("WARNING", message, prefix).trim()
+      console.warn(formattedConsoleMsg)
+    }
     return writeToFile("WARNING", message, directory, prefix)
   }
 
@@ -163,7 +170,11 @@ export const createLogger = (config: LoggerConfig) => {
    * @returns {Promise<string>} The logged message
    */
   const error = (message: string): Promise<string> => {
-    console.error(`${prefix ? `[${prefix}] ` : ""}[ERROR] ${message}`)
+    // Only output to console if enabled
+    if (consoleOutput) {
+      const formattedConsoleMsg = formatLogMessage("ERROR", message, prefix).trim()
+      console.error(formattedConsoleMsg)
+    }
     return writeToFile("ERROR", message, directory, prefix)
   }
 

@@ -45,14 +45,17 @@ const COMPONENT_MAP: Record<string, string> = {
   "docker-compose": "infrastructure",
 }
 
-// Initialize logger
+// Initialize logger - disable console output since we're redirecting to file
 const logger = createLogger({
   directory: LOG_DIR,
-  prefix: "webhook", // Add prefix for webhook logs
+  prefix: "webhook",
+  consoleOutput: false, // Disable console output to avoid duplication
 })
 
 // Log debug info at startup
 logger.info(`Server starting with config: ${JSON.stringify(debugInfo, null, 2)}`)
+// Use console.log directly for startup message
+console.log(`Webhook server starting on port ${PORT}`)
 
 /**
  * Verifies the GitHub webhook signature
@@ -271,13 +274,25 @@ const handleWebhook = (req: Request): Promise<Response> => {
 
 // Start the server
 try {
-  serve({
-    port: PORT,
-    fetch: handleWebhook,
-  })
+  // Check if server is already running on this port
+  try {
+    const server = serve({
+      port: PORT,
+      fetch: handleWebhook,
+    })
 
-  logger.info(`Webhook server started on port ${PORT}`)
-  console.log(`Webhook server started on port ${PORT}`)
+    logger.info(`Webhook server started on port ${PORT}`)
+    console.log(`Webhook server started on port ${PORT}`)
+  } catch (error) {
+    if (String(error).includes("EADDRINUSE")) {
+      logger.warning(`Port ${PORT} already in use, another instance may be running`)
+      console.log(`Port ${PORT} already in use, another instance may be running`)
+      // Exit gracefully
+      process.exit(0)
+    } else {
+      throw error
+    }
+  }
 } catch (error) {
   logger.error(`Failed to start server: ${String(error)}`)
   console.error(`Failed to start server: ${String(error)}`)
