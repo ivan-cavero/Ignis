@@ -12,5 +12,5 @@ http:
     webhook:
       loadBalancer:
         servers:
-          - url: "http://host.docker.internal:3333"
+          - url: "http://172.17.0.1:3333"  # IP de la red Docker bridge
         passHostHeader: true
