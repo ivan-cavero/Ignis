@@ -131,7 +131,7 @@ export const createLogger = (config: LoggerConfig) => {
     // Only output to console if enabled
     if (consoleOutput) {
       const formattedConsoleMsg = formatLogMessage("INFO", message, prefix).trim()
-      console.log(formattedConsoleMsg)
+      process.stdout.write(formattedConsoleMsg + "\n")
     }
     return writeToFile("INFO", message, directory, prefix)
   }
@@ -145,7 +145,7 @@ export const createLogger = (config: LoggerConfig) => {
     // Only output to console if enabled
     if (consoleOutput) {
       const formattedConsoleMsg = formatLogMessage("SUCCESS", message, prefix).trim()
-      console.log(formattedConsoleMsg)
+      process.stdout.write(formattedConsoleMsg + "\n")
     }
     return writeToFile("SUCCESS", message, directory, prefix)
   }
@@ -159,7 +159,7 @@ export const createLogger = (config: LoggerConfig) => {
     // Only output to console if enabled
     if (consoleOutput) {
       const formattedConsoleMsg = formatLogMessage("WARNING", message, prefix).trim()
-      console.warn(formattedConsoleMsg)
+      process.stderr.write(formattedConsoleMsg + "\n")
     }
     return writeToFile("WARNING", message, directory, prefix)
   }
@@ -173,7 +173,7 @@ export const createLogger = (config: LoggerConfig) => {
     // Only output to console if enabled
     if (consoleOutput) {
       const formattedConsoleMsg = formatLogMessage("ERROR", message, prefix).trim()
-      console.error(formattedConsoleMsg)
+      process.stderr.write(formattedConsoleMsg + "\n")
     }
     return writeToFile("ERROR", message, directory, prefix)
   }

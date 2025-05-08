@@ -45,29 +45,15 @@ const COMPONENT_MAP: Record<string, string> = {
   "docker-compose": "infrastructure",
 }
 
-// Custom console writer that formats messages before writing to stdout/stderr
-const customConsole = {
-  log: (message: string): void => {
-    const timestamp = new Date().toISOString()
-    process.stdout.write(`[${timestamp}] [INFO] ${message}\n`)
-  },
-  error: (message: string): void => {
-    const timestamp = new Date().toISOString()
-    process.stderr.write(`[${timestamp}] [ERROR] ${message}\n`)
-  },
-}
-
-// Initialize logger
+// Initialize logger with console output enabled
 const logger = createLogger({
   directory: LOG_DIR,
   prefix: "webhook",
-  consoleOutput: false, // Disable console output to avoid duplication
+  consoleOutput: true, // Enable console output for direct logging
 })
 
 // Log debug info at startup
 logger.info(`Server starting with config: ${JSON.stringify(debugInfo, null, 2)}`)
-// Use custom console for startup message
-customConsole.log(`Webhook server starting on port ${PORT}`)
 
 /**
  * Verifies the GitHub webhook signature
@@ -294,11 +280,9 @@ try {
     })
 
     logger.info(`Webhook server started on port ${PORT}`)
-    customConsole.log(`Webhook server started on port ${PORT}`)
   } catch (error) {
     if (String(error).includes("EADDRINUSE")) {
       logger.warning(`Port ${PORT} already in use, another instance may be running`)
-      customConsole.log(`Port ${PORT} already in use, another instance may be running`)
       // Exit gracefully
       process.exit(0)
     } else {
@@ -307,5 +291,4 @@ try {
   }
 } catch (error) {
   logger.error(`Failed to start server: ${String(error)}`)
-  customConsole.error(`Failed to start server: ${String(error)}`)
 }
