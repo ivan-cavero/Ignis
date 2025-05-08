@@ -15,6 +15,7 @@ const WEBHOOK_SECRET: string = process.env.WEBHOOK_SECRET || ""
 const DEPLOY_SCRIPT: string = "/opt/ignis/deployments/scripts/deploy.sh"
 const LOG_DIR: string = "/opt/ignis/logs/webhook"
 const PORT: number = Number.parseInt(process.env.WEBHOOK_PORT || "3333", 10)
+const HOST: string = process.env.WEBHOOK_HOST || "127.0.0.1" // Escuchar solo en localhost por defecto
 
 // Create date string for log file name (YYYYMMDD format)
 const getDateString = (): string => {
@@ -239,8 +240,8 @@ const handleWebhook = (req: Request): Promise<Response> => {
     return Promise.resolve(handleHealthCheck())
   }
 
-  // Only process POST requests to /webhook endpoint
-  if (req.method !== "POST" || url.pathname !== "/webhook") {
+  // Only process POST requests to /webhook endpoint or root path
+  if (req.method !== "POST" || (url.pathname !== "/webhook" && url.pathname !== "/")) {
     log("INFO", `Received request to ${url.pathname} with method ${req.method}`)
     return Promise.resolve(new Response("Not found", { status: 404 }))
   }
@@ -332,8 +333,10 @@ try {
   // Start the server
   serve({
     port: PORT,
+    hostname: "127.0.0.1",
     fetch: handleWebhook,
   })
+
 } catch (error) {
   log("ERROR", `Failed to start server: ${String(error)}`)
 }

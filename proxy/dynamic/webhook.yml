@@ -1,0 +1,16 @@
+http:
+  routers:
+    webhook:
+      rule: "Host(`webhook.ivancavero.com`)"
+      entryPoints:
+        - "websecure"
+      service: "webhook"
+      tls:
+        certResolver: "letsencrypt"
+
+  services:
+    webhook:
+      loadBalancer:
+        servers:
+          - url: "http://127.0.0.1:3333"
+        passHostHeader: true
