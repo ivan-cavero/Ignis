@@ -946,6 +946,19 @@ setup_project() {
   mkdir -p "$INSTALLATION_DIR/proxy/certs"
   mkdir -p "$INSTALLATION_DIR/deployments/service"
 
+  # Create acme.json file if it doesn't exist
+  if [ -d "$INSTALLATION_DIR/proxy/acme.json" ]; then
+    print_warning "Found acme.json as a directory, removing it"
+    rm -rf "$INSTALLATION_DIR/proxy/acme.json"
+  fi
+  
+  if [ ! -f "$INSTALLATION_DIR/proxy/acme.json" ]; then
+    print_message "$COLOR_INFO" "Creating acme.json file for Let's Encrypt certificates"
+    touch "$INSTALLATION_DIR/proxy/acme.json"
+    chmod 600 "$INSTALLATION_DIR/proxy/acme.json"
+    print_success "Created acme.json file with proper permissions"
+  fi
+
   # Create .env file if it doesn't exist
   if [ ! -f "$INSTALLATION_DIR/.env" ]; then
     print_message "$COLOR_INFO" "Creating template .env file..."

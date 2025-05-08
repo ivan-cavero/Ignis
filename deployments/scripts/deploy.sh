@@ -376,9 +376,22 @@ deploy_infrastructure() {
   # Create required directories
   mkdir -p "$PROJECT_ROOT/proxy/certs" "$PROJECT_ROOT/logs/webhook" "$PROJECT_ROOT/logs/deployments"
   
-  # Create acme.json if it doesn't exist
+  # Create acme.json if it doesn't exist - FIXED: Ensure it's a file, not a directory
   if [ ! -f "$PROJECT_ROOT/proxy/acme.json" ]; then
+    log_info "Creating acme.json file for Let's Encrypt certificates"
+    
+    # Check if it exists as a directory and remove it
+    if [ -d "$PROJECT_ROOT/proxy/acme.json" ]; then
+      log_warning "Found acme.json as a directory, removing it"
+      rm -rf "$PROJECT_ROOT/proxy/acme.json"
+    fi
+    
+    # Create empty file with proper permissions
     touch "$PROJECT_ROOT/proxy/acme.json"
+    chmod 600 "$PROJECT_ROOT/proxy/acme.json"
+    log_success "Created acme.json file with proper permissions"
+  else
+    # Ensure proper permissions
     chmod 600 "$PROJECT_ROOT/proxy/acme.json"
   fi
   
@@ -413,6 +426,26 @@ deploy_infrastructure() {
     docker compose -f "$compose_file" ${env_file:+ -f "$env_file"} up -d --build
   else
     docker compose -f "$compose_file" ${env_file:+ -f "$env_file"} up -d
+  fi
+  
+  # Wait for Traefik to start and generate certificates
+  log_info "Waiting for Traefik to initialize and generate certificates..."
+  local max_attempts=30
+  local attempt=1
+  
+  while [ $attempt -le $max_attempts ]; do
+    if docker exec traefik ls -la /etc/traefik/acme.json 2>/dev/null | grep -q "600"; then
+      log_success "Traefik is running and acme.json is properly configured"
+      break
+    fi
+    
+    log_info "Waiting for Traefik to initialize (attempt $attempt/$max_attempts)..."
+    sleep 10
+    attempt=$((attempt + 1))
+  done
+  
+  if [ $attempt -gt $max_attempts ]; then
+    log_warning "Timed out waiting for Traefik to fully initialize"
   fi
   
   # Deploy services

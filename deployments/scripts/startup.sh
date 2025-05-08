@@ -272,6 +272,24 @@ start_docker() {
   
   log_info "Starting Docker infrastructure"
   
+  # Ensure acme.json exists and is a file, not a directory
+  local acme_file="$PROJECT_ROOT/proxy/acme.json"
+  
+  if [ -d "$acme_file" ]; then
+    log_warning "Found acme.json as a directory, removing it"
+    rm -rf "$acme_file"
+  fi
+  
+  if [ ! -f "$acme_file" ]; then
+    log_info "Creating acme.json file for Let's Encrypt certificates"
+    touch "$acme_file"
+    chmod 600 "$acme_file"
+    log_success "Created acme.json file with proper permissions"
+  else
+    # Ensure proper permissions
+    chmod 600 "$acme_file"
+  fi
+  
   # Determine which compose file to use
   local compose_file="docker-compose.yml"
   
@@ -286,6 +304,26 @@ start_docker() {
     
     if [ $? -eq 0 ]; then
       log_success "Docker infrastructure started successfully"
+      
+      # Wait for Traefik to start and generate certificates
+      log_info "Waiting for Traefik to initialize and generate certificates..."
+      local max_attempts=30
+      local attempt=1
+      
+      while [ $attempt -le $max_attempts ]; do
+        if docker exec traefik ls -la /etc/traefik/acme.json 2>/dev/null | grep -q "600"; then
+          log_success "Traefik is running and acme.json is properly configured"
+          break
+        fi
+        
+        log_info "Waiting for Traefik to initialize (attempt $attempt/$max_attempts)..."
+        sleep 10
+        attempt=$((attempt + 1))
+      done
+      
+      if [ $attempt -gt $max_attempts ]; then
+        log_warning "Timed out waiting for Traefik to fully initialize"
+      fi
     else
       log_error "Failed to start Docker infrastructure"
       return 1
