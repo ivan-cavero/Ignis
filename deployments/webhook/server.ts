@@ -3,7 +3,7 @@
  * Listens for GitHub push events and triggers component-specific deployments
  *
  * @author v0
- * @version 1.0.0
+ * @version 2.0.0
  */
 import { serve } from "bun"
 import { spawnSync } from "child_process"
@@ -46,7 +46,10 @@ const COMPONENT_MAP: Record<string, string> = {
 }
 
 // Initialize logger
-const logger = createLogger({ directory: LOG_DIR })
+const logger = createLogger({
+  directory: LOG_DIR,
+  prefix: "webhook", // Add prefix for webhook logs
+})
 
 // Log debug info at startup
 logger.info(`Server starting with config: ${JSON.stringify(debugInfo, null, 2)}`)
@@ -268,7 +271,7 @@ const handleWebhook = (req: Request): Promise<Response> => {
 
 // Start the server
 try {
-  serve({
+  const server = serve({
     port: PORT,
     fetch: handleWebhook,
   })

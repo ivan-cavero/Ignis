@@ -3,7 +3,7 @@
 # Simple, functional deployment script for Ignis ERP
 #
 # Author: v0
-# Version: 1.0.0
+# Version: 2.0.0
 # License: MIT
 
 # === CONFIGURATION ===
@@ -155,7 +155,15 @@ deploy_services() {
       
       # Enable and restart the service
       sudo systemctl enable "$service_name"
-      sudo systemctl restart "$service_name"
+      
+      # Check if service is already running
+      if systemctl is-active --quiet "$service_name"; then
+        log "INFO" "Restarting service: $service_name"
+        sudo systemctl restart "$service_name"
+      else
+        log "INFO" "Starting service: $service_name"
+        sudo systemctl start "$service_name"
+      fi
     fi
   done
   
@@ -260,6 +268,13 @@ generate_summary() {
   
   echo "--- Service Status ---"
   systemctl list-units --type=service --all | grep "ignis"
+  
+  echo "--- Webhook Status ---"
+  if pgrep -f "bun run server.ts" > /dev/null; then
+    echo "Webhook server: Running"
+  else
+    echo "Webhook server: Not running"
+  fi
 }
 
 # === MAIN FUNCTION ===

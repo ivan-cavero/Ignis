@@ -3,7 +3,7 @@
  * Creates timestamped log files and provides pure logging functions
  *
  * @author v0
- * @version 1.0.0
+ * @version 2.0.0
  */
 import fs from "fs"
 import path from "path"
@@ -13,6 +13,7 @@ import path from "path"
  */
 type LoggerConfig = {
   readonly directory: string
+  readonly prefix?: string  // Optional prefix for log messages
 }
 
 /**
@@ -74,14 +75,16 @@ const ensureDirectory = (directory: string): Promise<string> =>
   })
 
 /**
- * Formats a log message with timestamp and level
+ * Formats a log message with timestamp, level, and optional prefix
  * @param {LogLevel} level - Log level
  * @param {string} message - Message to log
+ * @param {string} prefix - Optional prefix for the message
  * @returns {string} Formatted log message
  */
-const formatLogMessage = (level: LogLevel, message: string): string => {
+const formatLogMessage = (level: LogLevel, message: string, prefix?: string): string => {
   const timestamp = new Date().toISOString()
-  return `[${timestamp}] [${level}] ${message}\n`
+  const prefixStr = prefix ? `[${prefix}] ` : ""
+  return `[${timestamp}] [${level}] ${prefixStr}${message}\n`
 }
 
 /**
@@ -89,13 +92,14 @@ const formatLogMessage = (level: LogLevel, message: string): string => {
  * @param {LogLevel} level - Log level
  * @param {string} message - Message to write
  * @param {string} directory - Directory to write the log to
+ * @param {string} prefix - Optional prefix for the message
  * @returns {Promise<string>} The written message
  */
-const writeToFile = (level: LogLevel, message: string, directory: string): Promise<string> =>
+const writeToFile = (level: LogLevel, message: string, directory: string, prefix?: string): Promise<string> =>
   ensureDirectory(directory).then(() => {
     const datePrefix = createDailyTimestamp()
     const logFile = path.join(directory, `webhook-${datePrefix}.log`)
-    const formattedMessage = formatLogMessage(level, message)
+    const formattedMessage = formatLogMessage(level, message, prefix)
 
     return new Promise<string>((resolve, reject) => {
       fs.appendFile(logFile, formattedMessage, (err) => {
@@ -115,35 +119,47 @@ const writeToFile = (level: LogLevel, message: string, directory: string): Promi
  * @returns {Object} Logger functions
  */
 export const createLogger = (config: LoggerConfig) => {
-  const { directory } = config
+  const { directory, prefix } = config
 
   /**
    * Logs an info message
    * @param {string} message - Message to log
    * @returns {Promise<string>} The logged message
    */
-  const info = (message: string): Promise<string> => writeToFile("INFO", message, directory)
+  const info = (message: string): Promise<string> => {
+    console.log(`${prefix ? `[${prefix}] ` : ""}[INFO] ${message}`)
+    return writeToFile("INFO", message, directory, prefix)
+  }
 
   /**
    * Logs a success message
    * @param {string} message - Message to log
    * @returns {Promise<string>} The logged message
    */
-  const success = (message: string): Promise<string> => writeToFile("SUCCESS", message, directory)
+  const success = (message: string): Promise<string> => {
+    console.log(`${prefix ? `[${prefix}] ` : ""}[SUCCESS] ${message}`)
+    return writeToFile("SUCCESS", message, directory, prefix)
+  }
 
   /**
    * Logs a warning message
    * @param {string} message - Message to log
    * @returns {Promise<string>} The logged message
    */
-  const warning = (message: string): Promise<string> => writeToFile("WARNING", message, directory)
+  const warning = (message: string): Promise<string> => {
+    console.warn(`${prefix ? `[${prefix}] ` : ""}[WARNING] ${message}`)
+    return writeToFile("WARNING", message, directory, prefix)
+  }
 
   /**
    * Logs an error message
    * @param {string} message - Message to log
    * @returns {Promise<string>} The logged message
    */
-  const error = (message: string): Promise<string> => writeToFile("ERROR", message, directory)
+  const error = (message: string): Promise<string> => {
+    console.error(`${prefix ? `[${prefix}] ` : ""}[ERROR] ${message}`)
+    return writeToFile("ERROR", message, directory, prefix)
+  }
 
   return {
     info,
