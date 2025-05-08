@@ -9,7 +9,6 @@ http:
         certResolver: letsencrypt
       middlewares:
         - webhook-retry
-        - webhook-timeout
 
     webhook-http:
       rule: "Host(`webhook.ivancavero.com`)"
@@ -24,10 +23,6 @@ http:
       retry:
         attempts: 3
         initialInterval: "500ms"
-
-    webhook-timeout:
-      timeout:
-        response: 60s
 
   services:
     webhook:
