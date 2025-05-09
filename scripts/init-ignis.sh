@@ -244,7 +244,7 @@ initialize_log_file() {
 
 # Update system packages
 update_system() {
-  print_section "1" "12" "Updating system packages"
+  print_section "1" "14" "Updating system packages"
 
   if [ "$UPDATE_SYSTEM" = true ]; then
     print_message "$COLOR_INFO" "Updating package lists..."
@@ -261,7 +261,7 @@ update_system() {
 
 # Install required packages
 install_base_packages() {
-  print_section "2" "12" "Installing base packages"
+  print_section "2" "14" "Installing base packages"
 
   print_message "$COLOR_INFO" "Installing system packages..."
   
@@ -288,7 +288,7 @@ install_base_packages() {
 
 # Create system user
 create_system_user() {
-  print_section "3" "12" "Setting up system user"
+  print_section "3" "14" "Setting up system user"
 
   local user_created=false
 
@@ -331,7 +331,7 @@ create_system_user() {
 
 # Install NVM and Node.js
 install_node() {
-  print_section "4" "12" "Installing NVM and Node.js LTS"
+  print_section "4" "14" "Installing NVM and Node.js LTS"
 
   # Determine the correct home directory
   local USER_HOME
@@ -388,7 +388,7 @@ install_node() {
 
 # Install Bun
 install_bun() {
-  print_section "5" "12" "Installing Bun"
+  print_section "5" "14" "Installing Bun"
 
   # Determine the correct home directory
   local USER_HOME
@@ -440,7 +440,7 @@ install_bun() {
 
 # Install Java
 install_java() {
-  print_section "6" "12" "Installing Java"
+  print_section "6" "14" "Installing Java"
 
   if [ "$SETUP_JAVA" != true ]; then
     print_message "$COLOR_INFO" "Skipping Java installation (--no-java flag provided)"
@@ -468,7 +468,7 @@ install_java() {
 
 # Configure firewall
 configure_firewall() {
-  print_section "7" "12" "Configuring firewall"
+  print_section "7" "14" "Configuring firewall"
 
   if [ "$USE_IPTABLES" = true ]; then
     configure_iptables
@@ -577,7 +577,7 @@ configure_iptables() {
 
 # Configure Fail2Ban
 configure_fail2ban() {
-  print_section "8" "12" "Configuring Fail2Ban"
+  print_section "8" "14" "Configuring Fail2Ban"
 
   if [ "$SETUP_FAIL2BAN" != true ]; then
     print_message "$COLOR_INFO" "Skipping Fail2Ban configuration (--no-fail2ban flag provided)"
@@ -747,7 +747,7 @@ EOF
 
 # Configure SSH security
 configure_ssh_security() {
-  print_section "9" "12" "Configuring SSH security"
+  print_section "9" "14" "Configuring SSH security"
 
   if [ "$SETUP_SSH" != true ]; then
     print_message "$COLOR_INFO" "Skipping SSH configuration (--no-ssh flag provided)"
@@ -816,7 +816,7 @@ EOF
 
 # Install Docker
 install_docker() {
-  print_section "10" "12" "Installing Docker"
+  print_section "10" "14" "Installing Docker"
 
   if [ "$SETUP_DOCKER" != true ]; then
     print_message "$COLOR_INFO" "Skipping Docker installation (--no-docker flag provided)"
@@ -899,7 +899,7 @@ install_docker() {
 
 # Clone repository and set up project
 setup_project() {
-  print_section "11" "12" "Setting up Ignis project"
+  print_section "11" "14" "Setting up Ignis project"
 
   # Create installation directory if it doesn't exist
   if [ ! -d "$INSTALLATION_DIR" ]; then
@@ -990,7 +990,7 @@ setup_project() {
 
 # Install and configure services
 install_services() {
-  print_section "12" "12" "Installing and configuring services"
+  print_section "12" "14" "Installing and configuring services"
 
   if [ "$INSTALL_SERVICES" != true ]; then
     print_message "$COLOR_INFO" "Skipping service installation (--no-install-services flag provided)"
@@ -1041,6 +1041,78 @@ install_services() {
   fi
   
   print_success "Services installed and configured"
+}
+
+# Configure permissions
+configure_permissions() {
+  print_section "13" "14" "Configuring permissions"
+
+  print_message "$COLOR_INFO" "Setting up file permissions..."
+
+  # Set proper permissions for log directories
+  sudo chown -R "$SETUP_USER:$SETUP_USER" "$INSTALLATION_DIR/logs"
+  sudo chmod -R 775 "$INSTALLATION_DIR/logs"
+
+  # Set proper permissions for proxy directories
+  sudo chown -R "$SETUP_USER:$SETUP_USER" "$INSTALLATION_DIR/proxy"
+  sudo chmod -R 775 "$INSTALLATION_DIR/proxy"
+
+  # Set proper permissions for deployments directories
+  sudo chown -R "$SETUP_USER:$SETUP_USER" "$INSTALLATION_DIR/deployments"
+  sudo chmod -R 775 "$INSTALLATION_DIR/deployments"
+
+  # Set proper permissions for acme.json
+  sudo chown "$SETUP_USER:$SETUP_USER" "$INSTALLATION_DIR/proxy/acme.json"
+  sudo chmod 600 "$INSTALLATION_DIR/proxy/acme.json"
+
+  # Set proper permissions for .env file
+  sudo chown "$SETUP_USER:$SETUP_USER" "$INSTALLATION_DIR/.env"
+  sudo chmod 600 "$INSTALLATION_DIR/.env"
+
+  print_success "File permissions setup completed"
+}
+
+# Verify installation and permissions
+verify_installation() {
+  print_section "14" "14" "Verifying installation"
+
+  print_message "$COLOR_INFO" "Performing final verification checks..."
+  
+  # Check systemd services for NoNewPrivileges
+  local services_with_issues=()
+  for service_file in /etc/systemd/system/ignis-*.service; do
+    if [ -f "$service_file" ] && grep -q "NoNewPrivileges=true" "$service_file"; then
+      services_with_issues+=("$service_file")
+    fi
+  done
+  
+  if [ ${#services_with_issues[@]} -gt 0 ]; then
+    print_warning "Some services still have NoNewPrivileges=true:"
+    for service in "${services_with_issues[@]}"; do
+      print_message "$COLOR_WARNING" "  - $(basename "$service")"
+    done
+  else
+    print_success "All systemd services have correct NoNewPrivileges setting"
+  fi
+  
+  # Check Docker socket permissions
+  if [ -S "/var/run/docker.sock" ]; then
+    local socket_perms=$(stat -c "%a" /var/run/docker.sock)
+    if [ "$socket_perms" = "666" ] || [ "$socket_perms" = "660" ]; then
+      print_success "Docker socket has correct permissions"
+    else
+      print_warning "Docker socket has incorrect permissions: $socket_perms (should be 666 or 660)"
+    fi
+  fi
+  
+  # Check if user is in docker group
+  if groups "$SETUP_USER" | grep -q docker; then
+    print_success "$SETUP_USER is in the docker group"
+  else
+    print_warning "$SETUP_USER is not in the docker group"
+  fi
+  
+  print_success "Verification completed"
 }
 
 # Generate system summary
@@ -1177,6 +1249,10 @@ main() {
   install_docker
   setup_project
   install_services
+  configure_permissions
+  
+  # Final verification step
+  verify_installation
 
   # Generate summary
   generate_summary
