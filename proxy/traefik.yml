@@ -35,9 +35,11 @@ entryPoints:
       tls:
         certResolver: letsencrypt
         domains:
-          - main: "ivancavero.com"
-            sans:
-              - "*.ivancavero.com"
+          - main: "api.ivancavero.com"
+          - main: "app.ivancavero.com"
+          - main: "admin.ivancavero.com"
+          - main: "traefik.ivancavero.com"
+          - main: "webhook.ivancavero.com"
   dashboard:
     address: ":8080"
 
