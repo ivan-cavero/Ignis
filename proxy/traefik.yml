@@ -4,8 +4,6 @@
 global:
   checkNewVersion: true
   sendAnonymousUsage: false
-  experimental:
-    http3: true
 
 # Log configuration
 log:
