@@ -20,7 +20,7 @@ TimeoutStartSec=180
 TimeoutStopSec=30
 
 PrivateTmp=true
-NoNewPrivileges=true
+NoNewPrivileges=false
 
 [Install]
 WantedBy=multi-user.target
