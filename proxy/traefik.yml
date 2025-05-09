@@ -40,6 +40,7 @@ entryPoints:
           - main: "admin.ivancavero.com"
           - main: "traefik.ivancavero.com"
           - main: "webhook.ivancavero.com"
+          - main: "user.ivancavero.com"
   dashboard:
     address: ":8080"
 
