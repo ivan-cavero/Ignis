@@ -9,3 +9,5 @@ bun.lockb
 
 *.crt
 *.key
+
+.vscode

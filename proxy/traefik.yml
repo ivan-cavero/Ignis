@@ -4,6 +4,8 @@
 global:
   checkNewVersion: true
   sendAnonymousUsage: false
+  experimental:
+    http3: true
 
 # Log configuration
 log:
@@ -18,6 +20,7 @@ accessLog:
 api:
   dashboard: true
   insecure: false
+  debug: false
 
 # Entry points configuration
 entryPoints:
