@@ -60,7 +60,3 @@ certificatesResolvers:
       storage: /etc/traefik/acme.json
       httpChallenge:
         entryPoint: web
-      caServer: "https://acme-v02.api.letsencrypt.org/directory"
-      # Uncomment for additional logging
-      # logging:
-      #   level: DEBUG
