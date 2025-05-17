@@ -1,11 +1,28 @@
 {
-    "name": "ignis-backend",
-    "version": "0.1.0",
-    "type": "module",
-    "scripts": {
-        "start": "bun run index.ts"
-    },
-    "dependencies": {
-        "hono": "4.7.8"
-    }
+  "name": "ignis-backend",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "build": "tsc",
+    "test": "bun test",
+    "lint": "bunx @biomejs/biome check src/",
+    "format": "bunx @biomejs/biome format --write src/",
+    "docker:build": "docker build -t ignis-backend .",
+    "docker:run": "docker run -p 3000:3000 ignis-backend"
+  },
+  "dependencies": {
+    "hono": "4.7.10",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.13",
+    "@types/node": "^22.15.18",
+    "@biomejs/biome": "^1.7.3",
+    "typescript": "^5.3.3"
+  },
+  "engines": {
+    "bun": ">=1.0.0"
+  }
 }
