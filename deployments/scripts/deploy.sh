@@ -9,6 +9,7 @@
 # === CONFIGURATION ===
 readonly PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 readonly LOG_DIR="$PROJECT_ROOT/logs/deployments"
+readonly PROJECT_NAME="$(basename "$PROJECT_ROOT" | tr '[:upper:]' '[:lower:]')"
 readonly COLOR_RESET="\033[0m"
 readonly COLOR_INFO="\033[1;36m"    # Cyan
 readonly COLOR_SUCCESS="\033[1;32m" # Green
@@ -342,11 +343,33 @@ deploy_component() {
   
   case "$component" in
     backend|admin-frontend|user-frontend|landing-frontend|proxy)
-      cd "$PROJECT_ROOT"
-      if [ "$FORCE_REBUILD" = true ]; then
-        docker compose up -d --build "$component"
-      else
-        docker compose up -d "$component"
+      cd "$PROJECT_ROOT" || { log_error "Failed to change to project root"; return 1; }
+      
+      # Pull latest images if needed
+      if [ "$PULL_CHANGES" = true ]; then
+        log_info "Pulling latest images for $component..."
+        docker compose pull "$component" || log_warning "Failed to pull latest images for $component"
+      fi
+      
+      # Stop existing container if running
+      if docker ps --format '{{.Names}}' | grep -q "^${PROJECT_NAME}-${component}-"; then
+        log_info "Stopping existing $component container..."
+        docker compose stop "$component"
+        docker compose rm -f "$component"
+      fi
+      
+      # Build and start the container
+      log_info "Starting $component..."
+      if ! docker compose up -d --build --force-recreate "$component"; then
+        log_error "Failed to start $component"
+        return 1
+      fi
+      
+      # Verify the container is running
+      if ! docker ps --format '{{.Names}}' | grep -q "^${PROJECT_NAME}-${component}-"; then
+        log_error "$component container failed to start"
+        docker compose logs "$component"
+        return 1
       fi
       ;;
       
@@ -364,7 +387,7 @@ deploy_component() {
       ;;
   esac
   
-  log_success "Component $component deployed"
+  log_success "Component $component deployed successfully"
 }
 
 # Check and fix acme.json file
