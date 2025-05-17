@@ -348,7 +348,7 @@ const deployComponent = (component: string, environment: string, branch: string)
   const startTime = Date.now()
 
   // Build command arguments
-  const args = [DEPLOY_SCRIPT, `--component=${component}`, `--environment=${environment}`, `--branch=${branch}`]
+  const args = [DEPLOY_SCRIPT, `--component=${component}`, `--environment=${environment}`, `--branch=${branch}`, '--pull']
 
   // Execute deployment with timeout
   const result = spawnSync("bash", args, {

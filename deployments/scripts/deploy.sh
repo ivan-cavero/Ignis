@@ -434,7 +434,8 @@ deploy_infrastructure() {
   # Pull latest changes if git repository exists
   if [ "$PULL_CHANGES" = true ] && [ -d "$PROJECT_ROOT/.git" ]; then
     log_info "Pulling latest changes from git"
-    git checkout "$BRANCH" && git pull origin "$BRANCH"
+    sudo -u $USER git -C "$PROJECT_ROOT" checkout "$BRANCH" && \
+    sudo -u $USER git -C "$PROJECT_ROOT" pull origin "$BRANCH"
   fi
   
   # Verify Docker-to-host communication

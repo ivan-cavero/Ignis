@@ -976,6 +976,15 @@ setup_project() {
   # Set proper permissions
   sudo chown -R "$SETUP_USER:$SETUP_USER" "$INSTALLATION_DIR"
 
+  # Ensure .git directory has correct permissions
+  if [ -d "$INSTALLATION_DIR/.git" ]; then
+    print_message "$COLOR_INFO" "Setting up .git permissions..."
+    sudo chown -R "$SETUP_USER:$SETUP_USER" "$INSTALLATION_DIR/.git"
+    sudo chmod -R 755 "$INSTALLATION_DIR/.git"
+    sudo chmod g+s "$INSTALLATION_DIR/.git"  # Set setgid bit to maintain group ownership
+    print_success "Git repository permissions configured"
+  fi
+
   # Make sure script directories exist and have proper permissions
   if [ -d "$INSTALLATION_DIR/scripts" ]; then
     sudo chmod -R 755 "$INSTALLATION_DIR/scripts"
