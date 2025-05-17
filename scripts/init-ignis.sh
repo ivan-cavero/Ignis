@@ -4,11 +4,8 @@
 # and security configurations.
 # 
 # Author: v0
-# Version: 4.0.0
+# Version: 3.2.0
 # License: MIT
-
-# Fail fast on errors
-set -e
 
 # ==================== CONFIGURATION ====================
 # Colors for output
@@ -26,10 +23,6 @@ GIT_REPO="https://github.com/ivan-cavero/Ignis.git" # Git repository URL
 GIT_BRANCH="main"                                   # Default branch
 SETUP_USER="ignis"                                  # Default system user
 LOG_FILE="ignis-setup.log"                          # Log file name
-VERBOSITY=1                                         # Default verbosity level (0=quiet, 1=normal, 2=verbose)
-DRY_RUN=false                                       # Dry run mode
-UNINSTALL=false                                     # Uninstall mode
-CACHE_DIR="/var/cache/ignis-setup"                  # Cache directory for downloads
 
 # Port configurations - format: "port/protocol|comment"
 readonly ALLOWED_PORTS=(
@@ -52,7 +45,6 @@ USE_IPTABLES=false                                          # Use iptables inste
 LOG_TO_FILE=false                                           # Write logs to file
 INSTALL_SERVICES=true                                       # Install systemd services
 START_SERVICES=true                                         # Start services after installation
-PARALLEL_INSTALL=true                                       # Install packages in parallel when possible
 
 # Required packages by category
 readonly SYSTEM_PACKAGES="curl ca-certificates gnupg unzip git software-properties-common jq"
@@ -61,61 +53,11 @@ readonly JAVA_PACKAGES="openjdk-17-jre-headless"
 
 # ==================== UTILITY FUNCTIONS ====================
 
-# Set up cleanup trap for graceful exit
-cleanup() {
-  local exit_code=$?
-  if [ $exit_code -ne 0 ]; then
-    print_error "Script execution failed with exit code $exit_code"
-    print_message "$COLOR_INFO" "Check the log file for details: $LOG_FILE"
-  fi
-  
-  # Remove temporary files
-  if [ -d "/tmp/ignis-setup-$$" ]; then
-    rm -rf "/tmp/ignis-setup-$$"
-  fi
-  
-  exit $exit_code
-}
-
-# Set up trap for cleanup on exit
-trap cleanup EXIT INT TERM
-
-# Set up trap for error handling
-error_handler() {
-  local line=$1
-  local command=$2
-  local code=$3
-  print_error "Command '$command' failed with exit code $code at line $line"
-  
-  # Provide helpful context based on where the error occurred
-  case $line in
-    *update_system*)
-      print_message "$COLOR_INFO" "System update failed. Try manually with: sudo apt update && sudo apt upgrade -y"
-      ;;
-    *install_docker*)
-      print_message "$COLOR_INFO" "Docker installation failed. Check https://docs.docker.com/engine/install/ for manual installation"
-      ;;
-    *configure_firewall*)
-      print_message "$COLOR_INFO" "Firewall configuration failed. Make sure ufw or iptables is installed"
-      ;;
-    *)
-      print_message "$COLOR_INFO" "Check system requirements and try again"
-      ;;
-  esac
-}
-
-trap 'error_handler ${LINENO} "${BASH_COMMAND}" $?' ERR
-
-# Set appropriate umask for security
-umask 027
-
 # Pure function to log a message to file if enabled
 log_to_file() {
-  local level=$1
-  local message=$2
-  
-  if [ "$LOG_TO_FILE" = true ] && [ $VERBOSITY -ge $level ]; then
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] [${level}] $message" >> "$LOG_FILE"
+  local message="$1"
+  if [ "$LOG_TO_FILE" = true ]; then
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $message" >> "$LOG_FILE"
   fi
 }
 
@@ -123,13 +65,8 @@ log_to_file() {
 print_message() {
   local color="$1"
   local message="$2"
-  local level=${3:-1}  # Default level is 1
-  
-  if [ $VERBOSITY -ge $level ]; then
-    echo -e "${color}${message}${COLOR_RESET}"
-  fi
-  
-  log_to_file $level "$message"
+  echo -e "${color}${message}${COLOR_RESET}"
+  log_to_file "$message"
 }
 
 # Pure function to print a section header
@@ -142,23 +79,17 @@ print_section() {
 
 # Pure function to print a success message
 print_success() {
-  local message="$1"
-  local level=${2:-1}  # Default level is 1
-  print_message "$COLOR_SUCCESS" "✅ $message" $level
+  print_message "$COLOR_SUCCESS" "✅ $1"
 }
 
 # Pure function to print a warning message
 print_warning() {
-  local message="$1"
-  local level=${2:-1}  # Default level is 1
-  print_message "$COLOR_WARNING" "⚠️ $message" $level
+  print_message "$COLOR_WARNING" "⚠️ $1"
 }
 
 # Pure function to print an error message
 print_error() {
-  local message="$1"
-  local level=${2:-0}  # Default level is 0 (always show errors)
-  print_message "$COLOR_ERROR" "❌ $message" $level
+  print_message "$COLOR_ERROR" "❌ $1"
 }
 
 # Pure function to check if a command exists
@@ -194,61 +125,6 @@ is_port_in_use() {
 # Pure function to check if a docker container is running
 is_container_running() {
   docker ps --format "{{.Names}}" | grep -q "^$1$"
-}
-
-# Pure function to execute a command in dry run mode
-execute_cmd() {
-  local cmd="$1"
-  local description="$2"
-  local level=${3:-2}  # Default verbosity level for commands is 2
-  
-  if [ $VERBOSITY -ge $level ]; then
-    print_message "$COLOR_INFO" "Executing: $cmd" $level
-  fi
-  
-  if [ "$DRY_RUN" = true ]; then
-    print_message "$COLOR_INFO" "[DRY RUN] Would execute: $cmd" 1
-    return 0
-  else
-    log_to_file 2 "Executing: $cmd"
-    eval "$cmd"
-    local status=$?
-    log_to_file 2 "Command exited with status: $status"
-    return $status
-  fi
-}
-
-# Pure function to validate URL accessibility
-validate_url() {
-  local url="$1"
-  local timeout=${2:-5}
-  
-  if [ "$DRY_RUN" = true ]; then
-    print_message "$COLOR_INFO" "[DRY RUN] Would validate URL: $url" 2
-    return 0
-  fi
-  
-  if curl --output /dev/null --silent --head --fail --max-time $timeout "$url"; then
-    return 0
-  else
-    return 1
-  fi
-}
-
-# Pure function to check available disk space
-check_disk_space() {
-  local required_mb="$1"
-  local path="$2"
-  
-  # Get available space in MB
-  local available_mb
-  available_mb=$(df -m "$path" | awk 'NR==2 {print $4}')
-  
-  if [ "$available_mb" -lt "$required_mb" ]; then
-    return 1
-  else
-    return 0
-  fi
 }
 
 # Function to parse command line arguments
@@ -309,27 +185,6 @@ parse_arguments() {
       --no-start-services)
         START_SERVICES=false
         ;;
-      --dry-run)
-        DRY_RUN=true
-        print_message "$COLOR_INFO" "Running in DRY RUN mode - no changes will be made"
-        ;;
-      --uninstall)
-        UNINSTALL=true
-        print_message "$COLOR_INFO" "Running in UNINSTALL mode"
-        ;;
-      --verbose)
-        VERBOSITY=2
-        print_message "$COLOR_INFO" "Verbose mode enabled"
-        ;;
-      --quiet)
-        VERBOSITY=0
-        ;;
-      --no-parallel)
-        PARALLEL_INSTALL=false
-        ;;
-      --cache-dir=*)
-        CACHE_DIR="${1#*=}"
-        ;;
       --help)
         show_help
         exit 0
@@ -370,12 +225,6 @@ Options:
 --log-to-file         Write logs to file
 --no-install-services Skip installation of systemd services
 --no-start-services   Skip starting services after installation
---dry-run             Show what would be done without making changes
---uninstall           Remove Ignis installation
---verbose             Show more detailed output
---quiet               Show minimal output
---no-parallel         Disable parallel installation of packages
---cache-dir=DIR       Set cache directory for downloads (default: /var/cache/ignis-setup)
 --help                Show this help message
 
 Example:
@@ -387,100 +236,22 @@ EOF
 initialize_log_file() {
   if [ "$LOG_TO_FILE" = true ]; then
     echo "=== IGNIS SYSTEM INITIALIZATION LOG - $(date) ===" > "$LOG_FILE"
-    echo "Command: $0 $*" >> "$LOG_FILE"
-    echo "System: $(uname -a)" >> "$LOG_FILE"
-    echo "Distribution: $(cat /etc/os-release | grep PRETTY_NAME | cut -d= -f2 | tr -d '"')" >> "$LOG_FILE"
-    echo "=== CONFIGURATION ===" >> "$LOG_FILE"
-    echo "SSH_PORT=$SSH_PORT" >> "$LOG_FILE"
-    echo "INSTALLATION_DIR=$INSTALLATION_DIR" >> "$LOG_FILE"
-    echo "GIT_REPO=$GIT_REPO" >> "$LOG_FILE"
-    echo "GIT_BRANCH=$GIT_BRANCH" >> "$LOG_FILE"
-    echo "SETUP_USER=$SETUP_USER" >> "$LOG_FILE"
-    echo "DRY_RUN=$DRY_RUN" >> "$LOG_FILE"
-    echo "UNINSTALL=$UNINSTALL" >> "$LOG_FILE"
-    echo "VERBOSITY=$VERBOSITY" >> "$LOG_FILE"
-    echo "===================" >> "$LOG_FILE"
-    
     print_message "$COLOR_INFO" "Logging to file: $LOG_FILE"
   fi
-}
-
-# ==================== VALIDATION FUNCTIONS ====================
-
-# Validate system requirements
-validate_system_requirements() {
-  print_section "1" "15" "Validating system requirements"
-  
-  # Check OS
-  if [ ! -f /etc/os-release ]; then
-    print_error "Unsupported operating system: /etc/os-release not found"
-    exit 1
-  fi
-  
-  # Check if running on Debian-based system
-  if ! grep -q "ID=debian\|ID=ubuntu\|ID_LIKE=debian" /etc/os-release; then
-    print_warning "This script is designed for Debian-based systems. Your system may not be fully compatible."
-  fi
-  
-  # Check if running as root or with sudo privileges
-  if [ "$(id -u)" -ne 0 ]; then
-    if ! sudo -v >/dev/null 2>&1; then
-      print_error "This script requires root privileges or sudo access"
-      exit 1
-    fi
-  fi
-  
-  # Check Bash version
-  if [ "${BASH_VERSINFO[0]}" -lt 4 ]; then
-    print_error "Bash version 4.0 or higher is required. You have ${BASH_VERSION}"
-    exit 1
-  fi
-  
-  # Check disk space (need at least 2GB free)
-  if ! check_disk_space 2048 "/"; then
-    print_error "Insufficient disk space. At least 2GB free space is required."
-    exit 1
-  fi
-  
-  # Check if required commands are available
-  local missing_commands=()
-  for cmd in curl grep awk sed; do
-    if ! command_exists "$cmd"; then
-      missing_commands+=("$cmd")
-    fi
-  done
-  
-  if [ ${#missing_commands[@]} -gt 0 ]; then
-    print_error "Required commands not found: ${missing_commands[*]}"
-    print_error "Please install these commands and try again"
-    exit 1
-  fi
-  
-  # Validate repository URL if cloning is enabled
-  if [ "$CLONE_REPO" = true ]; then
-    print_message "$COLOR_INFO" "Validating repository URL..." 2
-    if ! validate_url "$GIT_REPO"; then
-      print_error "Repository URL is not accessible: $GIT_REPO"
-      print_message "$COLOR_INFO" "Check your internet connection or repository URL" 1
-      exit 1
-    fi
-  fi
-  
-  print_success "System requirements validated"
 }
 
 # ==================== INSTALLATION FUNCTIONS ====================
 
 # Update system packages
 update_system() {
-  print_section "2" "15" "Updating system packages"
+  print_section "1" "12" "Updating system packages"
 
   if [ "$UPDATE_SYSTEM" = true ]; then
     print_message "$COLOR_INFO" "Updating package lists..."
-    execute_cmd "sudo apt update -y"
+    sudo apt update -y
     
     print_message "$COLOR_INFO" "Upgrading packages..."
-    execute_cmd "sudo apt upgrade -y"
+    sudo apt upgrade -y
     
     print_success "System packages updated"
   else
@@ -490,60 +261,26 @@ update_system() {
 
 # Install required packages
 install_base_packages() {
-  print_section "3" "15" "Installing base packages"
+  print_section "2" "12" "Installing base packages"
 
   print_message "$COLOR_INFO" "Installing system packages..."
   
-  # Create cache directory if it doesn't exist
-  if [ ! -d "$CACHE_DIR" ] && [ "$DRY_RUN" = false ]; then
-    execute_cmd "sudo mkdir -p $CACHE_DIR"
-  fi
-  
   # Install all system packages at once
-  execute_cmd "sudo apt update -y"
-  
-  if [ "$PARALLEL_INSTALL" = true ]; then
-    # Install packages in parallel
-    local packages=($SYSTEM_PACKAGES)
-    local install_commands=()
-    
-    for pkg in "${packages[@]}"; do
-      install_commands+=("sudo apt install -y -o Dir::Cache::Archives=$CACHE_DIR $pkg")
-    done
-    
-    if [ "$DRY_RUN" = false ]; then
-      print_message "$COLOR_INFO" "Installing packages in parallel..." 2
-      # Use GNU Parallel if available, otherwise fall back to sequential installation
-      if command_exists parallel; then
-        printf "%s\n" "${install_commands[@]}" | parallel -j$(nproc) || {
-          print_warning "Parallel installation failed, falling back to sequential installation"
-          execute_cmd "sudo apt install -y -o Dir::Cache::Archives=$CACHE_DIR $SYSTEM_PACKAGES"
-        }
-      else
-        execute_cmd "sudo apt install -y -o Dir::Cache::Archives=$CACHE_DIR $SYSTEM_PACKAGES"
-      fi
-    else
-      print_message "$COLOR_INFO" "[DRY RUN] Would install packages: $SYSTEM_PACKAGES" 1
-    fi
-  else
-    # Install packages sequentially
-    execute_cmd "sudo apt install -y -o Dir::Cache::Archives=$CACHE_DIR $SYSTEM_PACKAGES"
-  fi
+  sudo apt update -y
+  sudo apt install -y $SYSTEM_PACKAGES
   
   # Verify critical commands
-  if [ "$DRY_RUN" = false ]; then
-    local missing_commands=()
-    for cmd in curl git jq; do
-      if ! command_exists "$cmd"; then
-        missing_commands+=("$cmd")
-      fi
-    done
-    
-    if [ ${#missing_commands[@]} -gt 0 ]; then
-      print_error "Required commands not found: ${missing_commands[*]}"
-      print_error "Installation failed. Please check your system configuration."
-      exit 1
+  local missing_commands=()
+  for cmd in curl git jq; do
+    if ! command_exists "$cmd"; then
+      missing_commands+=("$cmd")
     fi
+  done
+  
+  if [ ${#missing_commands[@]} -gt 0 ]; then
+    print_error "Required commands not found: ${missing_commands[*]}"
+    print_error "Installation failed. Please check your system configuration."
+    exit 1
   fi
   
   print_success "All required packages installed and verified"
@@ -551,42 +288,34 @@ install_base_packages() {
 
 # Create system user
 create_system_user() {
-  print_section "4" "15" "Setting up system user"
+  print_section "3" "12" "Setting up system user"
 
   local user_created=false
 
   if ! user_exists "$SETUP_USER"; then
     print_message "$COLOR_INFO" "Creating user $SETUP_USER..."
-    execute_cmd "sudo useradd -m -s /bin/bash $SETUP_USER"
+    sudo useradd -m -s /bin/bash "$SETUP_USER"
     
     # Add user to sudo group
-    execute_cmd "sudo usermod -aG sudo $SETUP_USER"
+    sudo usermod -aG sudo "$SETUP_USER"
     
     # Set a password for the user if password authentication is enabled
     if [ "$ALLOW_PASSWORD_AUTH" = true ]; then
       print_message "$COLOR_INFO" "Setting password for $SETUP_USER..."
-      # Generate a secure random password if not in dry run mode
-      if [ "$DRY_RUN" = false ]; then
-        local password
-        password=$(openssl rand -base64 12)
-        echo "$SETUP_USER:$password" | sudo chpasswd
-        print_warning "Generated password for $SETUP_USER: $password"
-        print_warning "Please change this password immediately after login."
-      else
-        print_message "$COLOR_INFO" "[DRY RUN] Would set a random password for $SETUP_USER" 1
-      fi
+      echo "$SETUP_USER:ignis123" | sudo chpasswd
+      print_warning "Default password set to 'ignis123'. Please change it immediately after login."
     fi
     
     user_created=true
     print_success "User $SETUP_USER created"
     
     # Set up SSH directory for the new user
-    if [ ! -d "/home/$SETUP_USER/.ssh" ] || [ "$DRY_RUN" = true ]; then
-      execute_cmd "sudo mkdir -p /home/$SETUP_USER/.ssh"
-      execute_cmd "sudo chmod 700 /home/$SETUP_USER/.ssh"
-      execute_cmd "sudo touch /home/$SETUP_USER/.ssh/authorized_keys"
-      execute_cmd "sudo chmod 600 /home/$SETUP_USER/.ssh/authorized_keys"
-      execute_cmd "sudo chown -R $SETUP_USER:$SETUP_USER /home/$SETUP_USER/.ssh"
+    if [ ! -d "/home/$SETUP_USER/.ssh" ]; then
+      sudo mkdir -p "/home/$SETUP_USER/.ssh"
+      sudo chmod 700 "/home/$SETUP_USER/.ssh"
+      sudo touch "/home/$SETUP_USER/.ssh/authorized_keys"
+      sudo chmod 600 "/home/$SETUP_USER/.ssh/authorized_keys"
+      sudo chown -R "$SETUP_USER:$SETUP_USER" "/home/$SETUP_USER/.ssh"
     fi
     
     if [ "$ALLOW_PASSWORD_AUTH" = false ]; then
@@ -602,7 +331,7 @@ create_system_user() {
 
 # Install NVM and Node.js
 install_node() {
-  print_section "5" "15" "Installing NVM and Node.js LTS"
+  print_section "4" "12" "Installing NVM and Node.js LTS"
 
   # Determine the correct home directory
   local USER_HOME
@@ -612,62 +341,54 @@ install_node() {
     USER_HOME="/home/$SETUP_USER"
   fi
 
-  if [ ! -d "$USER_HOME/.nvm" ] || [ "$DRY_RUN" = true ]; then
+  if [ ! -d "$USER_HOME/.nvm" ]; then
     print_message "$COLOR_INFO" "Installing NVM..."
     
     # If running as the target user
     if [ "$(whoami)" = "$SETUP_USER" ]; then
-      execute_cmd "curl -s -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.3/install.sh | bash"
+      curl -s -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.3/install.sh | bash
     else
       # Running as another user (likely root), so use sudo to install for the target user
-      execute_cmd "sudo -u $SETUP_USER bash -c 'curl -s -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.3/install.sh | bash'"
+      sudo -u "$SETUP_USER" bash -c 'curl -s -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.3/install.sh | bash'
     fi
   else
     print_success "NVM is already installed"
   fi
 
   # Load NVM and install Node.js
-  if [ "$DRY_RUN" = false ]; then
-    if [ "$(whoami)" = "$SETUP_USER" ]; then
-      # Running as the target user
-      export NVM_DIR="$USER_HOME/.nvm"
-      [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
-      
-      if ! command_exists node; then
-        print_message "$COLOR_INFO" "Installing Node.js LTS..."
-        execute_cmd "nvm install --lts"
-        execute_cmd "nvm use --lts"
-        execute_cmd "nvm alias default lts/*"
-      else
-        print_success "Node.js is already installed: $(node -v)"
-      fi
+  if [ "$(whoami)" = "$SETUP_USER" ]; then
+    # Running as the target user
+    export NVM_DIR="$USER_HOME/.nvm"
+    [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+    
+    if ! command_exists node; then
+      print_message "$COLOR_INFO" "Installing Node.js LTS..."
+      nvm install --lts
+      nvm use --lts
+      nvm alias default lts/*
     else
-      # Running as another user, use sudo to run commands as the target user
-      print_message "$COLOR_INFO" "Installing Node.js LTS for user $SETUP_USER..."
-      execute_cmd "sudo -u $SETUP_USER bash -c \"export NVM_DIR='$USER_HOME/.nvm' && [ -s '\$NVM_DIR/nvm.sh' ] && . '\$NVM_DIR/nvm.sh' && nvm install --lts && nvm use --lts && nvm alias default lts/*\""
+      print_success "Node.js is already installed: $(node -v)"
     fi
   else
-    print_message "$COLOR_INFO" "[DRY RUN] Would install Node.js LTS" 1
+    # Running as another user, use sudo to run commands as the target user
+    print_message "$COLOR_INFO" "Installing Node.js LTS for user $SETUP_USER..."
+    sudo -u "$SETUP_USER" bash -c "export NVM_DIR=\"$USER_HOME/.nvm\" && [ -s \"\$NVM_DIR/nvm.sh\" ] && . \"\$NVM_DIR/nvm.sh\" && nvm install --lts && nvm use --lts && nvm alias default lts/*"
   fi
 
   # Create global symlinks for node and npm
-  if [ -d "$USER_HOME/.nvm/versions/node" ] || [ "$DRY_RUN" = true ]; then
-    if [ "$DRY_RUN" = false ]; then
-      NODE_VERSION=$(ls -1 "$USER_HOME/.nvm/versions/node" | grep -v "versions" | sort -V | tail -n 1)
-      if [ -n "$NODE_VERSION" ]; then
-        execute_cmd "sudo ln -sf $USER_HOME/.nvm/versions/node/$NODE_VERSION/bin/node /usr/local/bin/node"
-        execute_cmd "sudo ln -sf $USER_HOME/.nvm/versions/node/$NODE_VERSION/bin/npm /usr/local/bin/npm"
-      fi
-    else
-      print_message "$COLOR_INFO" "[DRY RUN] Would create Node.js symlinks" 1
+  if [ -d "$USER_HOME/.nvm/versions/node" ]; then
+    NODE_VERSION=$(ls -1 "$USER_HOME/.nvm/versions/node" | grep -v "versions" | sort -V | tail -n 1)
+    if [ -n "$NODE_VERSION" ]; then
+      sudo ln -sf "$USER_HOME/.nvm/versions/node/$NODE_VERSION/bin/node" /usr/local/bin/node
+      sudo ln -sf "$USER_HOME/.nvm/versions/node/$NODE_VERSION/bin/npm" /usr/local/bin/npm
+      print_success "Node.js symlinks created"
     fi
-    print_success "Node.js symlinks created"
   fi
 }
 
 # Install Bun
 install_bun() {
-  print_section "6" "15" "Installing Bun"
+  print_section "5" "12" "Installing Bun"
 
   # Determine the correct home directory
   local USER_HOME
@@ -677,41 +398,39 @@ install_bun() {
     USER_HOME="/home/$SETUP_USER"
   fi
 
-  if ! command_exists bun || [ "$DRY_RUN" = true ]; then
+  if ! command_exists bun; then
     print_message "$COLOR_INFO" "Installing Bun..."
     
-    if [ "$(whoami)" = "$SETUP_USER" ] && [ "$DRY_RUN" = false ]; then
+    if [ "$(whoami)" = "$SETUP_USER" ]; then
       # Running as the target user
-      execute_cmd "curl -fsSL https://bun.sh/install | bash"
-    elif [ "$DRY_RUN" = false ]; then
-      # Running as another user, use sudo to run commands as the target user
-      execute_cmd "sudo -u $SETUP_USER bash -c 'curl -fsSL https://bun.sh/install | bash'"
+      curl -fsSL https://bun.sh/install | bash
     else
-      print_message "$COLOR_INFO" "[DRY RUN] Would install Bun" 1
+      # Running as another user, use sudo to run commands as the target user
+      sudo -u "$SETUP_USER" bash -c 'curl -fsSL https://bun.sh/install | bash'
     fi
     
     # Create global symlink for bun
     print_message "$COLOR_INFO" "Creating global symlink for Bun..."
-    execute_cmd "sudo ln -sf $USER_HOME/.bun/bin/bun /usr/local/bin/bun"
+    sudo ln -sf "$USER_HOME/.bun/bin/bun" /usr/local/bin/bun
   else
     print_success "Bun is already installed: $(bun --version)"
     
     # Check if symlink exists and points to the correct location
-    if [ -L "/usr/local/bin/bun" ] && [ "$DRY_RUN" = false ]; then
+    if [ -L "/usr/local/bin/bun" ]; then
       LINK_TARGET=$(readlink -f /usr/local/bin/bun)
       if [ "$LINK_TARGET" != "$USER_HOME/.bun/bin/bun" ]; then
         print_message "$COLOR_INFO" "Updating Bun symlink..."
-        execute_cmd "sudo rm -f /usr/local/bin/bun"
-        execute_cmd "sudo ln -sf $USER_HOME/.bun/bin/bun /usr/local/bin/bun"
+        sudo rm -f /usr/local/bin/bun
+        sudo ln -sf "$USER_HOME/.bun/bin/bun" /usr/local/bin/bun
       fi
     else
       print_message "$COLOR_INFO" "Creating global symlink for Bun..."
-      execute_cmd "sudo ln -sf $USER_HOME/.bun/bin/bun /usr/local/bin/bun"
+      sudo ln -sf "$USER_HOME/.bun/bin/bun" /usr/local/bin/bun
     fi
   fi
 
   # Verify Bun installation
-  if command_exists bun || [ "$DRY_RUN" = true ]; then
+  if command_exists bun; then
     print_success "Bun installation verified"
   else
     print_error "Bun installation failed"
@@ -721,14 +440,14 @@ install_bun() {
 
 # Install Java
 install_java() {
-  print_section "7" "15" "Installing Java"
+  print_section "6" "12" "Installing Java"
 
   if [ "$SETUP_JAVA" != true ]; then
     print_message "$COLOR_INFO" "Skipping Java installation (--no-java flag provided)"
     return
   fi
 
-  if command_exists java && [ "$DRY_RUN" = false ]; then
+  if command_exists java; then
     print_success "Java is already installed: $(java -version 2>&1 | head -n 1)"
     return
   fi
@@ -736,16 +455,12 @@ install_java() {
   print_message "$COLOR_INFO" "Installing Java..."
 
   # Install Java packages
-  execute_cmd "sudo apt update -y"
-  execute_cmd "sudo apt install -y -o Dir::Cache::Archives=$CACHE_DIR $JAVA_PACKAGES"
+  sudo apt update -y
+  sudo apt install -y $JAVA_PACKAGES
 
   # Verify Java installation
-  if command_exists java || [ "$DRY_RUN" = true ]; then
-    if [ "$DRY_RUN" = false ]; then
-      print_success "Java installed successfully: $(java -version 2>&1 | head -n 1)"
-    else
-      print_success "Java would be installed successfully"
-    fi
+  if command_exists java; then
+    print_success "Java installed successfully: $(java -version 2>&1 | head -n 1)"
   else
     print_error "Java installation failed"
   fi
@@ -753,7 +468,7 @@ install_java() {
 
 # Configure firewall
 configure_firewall() {
-  print_section "8" "15" "Configuring firewall"
+  print_section "7" "12" "Configuring firewall"
 
   if [ "$USE_IPTABLES" = true ]; then
     configure_iptables
@@ -767,12 +482,12 @@ configure_ufw() {
   print_message "$COLOR_INFO" "Configuring UFW firewall..."
 
   # Install UFW
-  execute_cmd "sudo apt update -y"
-  execute_cmd "sudo apt install -y -o Dir::Cache::Archives=$CACHE_DIR ufw"
+  sudo apt update -y
+  sudo apt install -y ufw
 
   # Reset UFW to default state
   print_message "$COLOR_INFO" "Resetting UFW to default state..."
-  execute_cmd "sudo ufw --force reset"
+  sudo ufw --force reset
 
   # Configure ports from ALLOWED_PORTS array
   print_message "$COLOR_INFO" "Configuring firewall rules..."
@@ -784,29 +499,25 @@ configure_ufw() {
     # Split port/protocol into port and protocol
     IFS="/" read -r port protocol <<< "$port_proto"
     
-    print_message "$COLOR_INFO" "Adding rule: $port/$protocol ($comment)" 2
-    execute_cmd "sudo ufw allow $port/$protocol comment \"$comment\""
+    print_message "$COLOR_INFO" "Adding rule: $port/$protocol ($comment)"
+    sudo ufw allow "$port/$protocol" comment "$comment"
   done
 
   # Enable UFW if not already enabled
   print_message "$COLOR_INFO" "Enabling firewall..."
-  execute_cmd "sudo ufw --force enable"
+  sudo ufw --force enable
 
   # Verify UFW is active
-  if [ "$DRY_RUN" = false ]; then
-    if sudo ufw status | grep -q "Status: active"; then
-      print_success "UFW firewall is active and configured"
-    else
-      print_warning "Failed to enable UFW. Trying again..."
-      execute_cmd "sudo systemctl restart ufw"
-      if sudo ufw status | grep -q "Status: active"; then
-        print_success "UFW firewall is now active"
-      else
-        print_warning "Could not enable UFW. Please check configuration manually."
-      fi
-    fi
+  if sudo ufw status | grep -q "Status: active"; then
+    print_success "UFW firewall is active and configured"
   else
-    print_success "UFW firewall would be configured"
+    print_warning "Failed to enable UFW. Trying again..."
+    sudo systemctl restart ufw
+    if sudo ufw status | grep -q "Status: active"; then
+      print_success "UFW firewall is now active"
+    else
+      print_warning "Could not enable UFW. Please check configuration manually."
+    fi
   fi
 }
 
@@ -815,30 +526,30 @@ configure_iptables() {
   print_message "$COLOR_INFO" "Configuring iptables firewall..."
 
   # Install iptables-persistent
-  execute_cmd "sudo apt update -y"
+  sudo apt update -y
   # Pre-answer the prompt to save current rules
-  execute_cmd "echo iptables-persistent iptables-persistent/autosave_v4 boolean true | sudo debconf-set-selections"
-  execute_cmd "echo iptables-persistent iptables-persistent/autosave_v6 boolean true | sudo debconf-set-selections"
-  execute_cmd "sudo apt install -y -o Dir::Cache::Archives=$CACHE_DIR iptables-persistent"
+  echo iptables-persistent iptables-persistent/autosave_v4 boolean true | sudo debconf-set-selections
+  echo iptables-persistent iptables-persistent/autosave_v6 boolean true | sudo debconf-set-selections
+  sudo apt install -y iptables-persistent
 
   # Flush existing rules
-  execute_cmd "sudo iptables -F"
-  execute_cmd "sudo iptables -X"
-  execute_cmd "sudo iptables -t nat -F"
-  execute_cmd "sudo iptables -t nat -X"
-  execute_cmd "sudo iptables -t mangle -F"
-  execute_cmd "sudo iptables -t mangle -X"
+  sudo iptables -F
+  sudo iptables -X
+  sudo iptables -t nat -F
+  sudo iptables -t nat -X
+  sudo iptables -t mangle -F
+  sudo iptables -t mangle -X
 
   # Set default policies
-  execute_cmd "sudo iptables -P INPUT DROP"
-  execute_cmd "sudo iptables -P FORWARD DROP"
-  execute_cmd "sudo iptables -P OUTPUT ACCEPT"
+  sudo iptables -P INPUT DROP
+  sudo iptables -P FORWARD DROP
+  sudo iptables -P OUTPUT ACCEPT
 
   # Allow established connections
-  execute_cmd "sudo iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT"
+  sudo iptables -A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
 
   # Allow loopback
-  execute_cmd "sudo iptables -A INPUT -i lo -j ACCEPT"
+  sudo iptables -A INPUT -i lo -j ACCEPT
 
   # Configure ports from ALLOWED_PORTS array
   print_message "$COLOR_INFO" "Configuring firewall rules..."
@@ -850,23 +561,23 @@ configure_iptables() {
     # Split port/protocol into port and protocol
     IFS="/" read -r port protocol <<< "$port_proto"
     
-    print_message "$COLOR_INFO" "Adding rule: $port/$protocol ($comment)" 2
-    execute_cmd "sudo iptables -A INPUT -p $protocol --dport $port -j ACCEPT"
+    print_message "$COLOR_INFO" "Adding rule: $port/$protocol ($comment)"
+    sudo iptables -A INPUT -p "$protocol" --dport "$port" -j ACCEPT
   done
 
   # Allow Docker bridge network to communicate with host
-  execute_cmd "sudo iptables -I INPUT -i docker0 -j ACCEPT"
+  sudo iptables -I INPUT -i docker0 -j ACCEPT
   print_message "$COLOR_SUCCESS" "Added iptables rule for Docker bridge"
 
   # Save rules
-  execute_cmd "sudo netfilter-persistent save"
+  sudo netfilter-persistent save
 
   print_success "iptables firewall configured"
 }
 
 # Configure Fail2Ban
 configure_fail2ban() {
-  print_section "9" "15" "Configuring Fail2Ban"
+  print_section "8" "12" "Configuring Fail2Ban"
 
   if [ "$SETUP_FAIL2BAN" != true ]; then
     print_message "$COLOR_INFO" "Skipping Fail2Ban configuration (--no-fail2ban flag provided)"
@@ -875,39 +586,39 @@ configure_fail2ban() {
 
   # Install Fail2Ban
   print_message "$COLOR_INFO" "Installing Fail2Ban..."
-  execute_cmd "sudo apt update -y"
-  execute_cmd "sudo apt install -y -o Dir::Cache::Archives=$CACHE_DIR fail2ban"
+  sudo apt update -y
+  sudo apt install -y fail2ban
 
   print_message "$COLOR_INFO" "Setting up Fail2Ban..."
 
   # Check if auth log file exists
   AUTH_LOG="/var/log/auth.log"
-  if [ ! -f "$AUTH_LOG" ] && [ "$DRY_RUN" = false ]; then
+  if [ ! -f "$AUTH_LOG" ]; then
     print_warning "Auth log file not found at $AUTH_LOG"
     # Create the file if it doesn't exist
-    execute_cmd "sudo touch $AUTH_LOG"
-    execute_cmd "sudo chmod 640 $AUTH_LOG"
-    execute_cmd "sudo chown root:adm $AUTH_LOG"
+    sudo touch "$AUTH_LOG"
+    sudo chmod 640 "$AUTH_LOG"
+    sudo chown root:adm "$AUTH_LOG"
     print_message "$COLOR_INFO" "Created empty auth log file"
   fi
 
   # Check permissions of auth log file
-  if [ -f "$AUTH_LOG" ] && [ ! -r "$AUTH_LOG" ] && [ "$DRY_RUN" = false ]; then
+  if [ -f "$AUTH_LOG" ] && [ ! -r "$AUTH_LOG" ]; then
     print_warning "Auth log file exists but is not readable. Fixing permissions..."
-    execute_cmd "sudo chmod 640 $AUTH_LOG"
-    execute_cmd "sudo chown root:adm $AUTH_LOG"
+    sudo chmod 640 "$AUTH_LOG"
+    sudo chown root:adm "$AUTH_LOG"
   fi
 
   # Stop the service if it's running
-  execute_cmd "sudo systemctl stop fail2ban || true"
+  sudo systemctl stop fail2ban || true
 
   # Remove previous configurations that might cause problems
-  execute_cmd "sudo rm -f /etc/fail2ban/jail.local"
+  sudo rm -f /etc/fail2ban/jail.local
 
   # Create a basic configuration that works even without existing log files
   print_message "$COLOR_INFO" "Creating basic Fail2Ban configuration..."
-  
-  local fail2ban_config="[DEFAULT]
+  sudo tee "/etc/fail2ban/jail.local" > /dev/null << EOF
+[DEFAULT]
 # Incremental ban time
 bantime.increment = true
 bantime.rndtime = 300
@@ -946,31 +657,28 @@ logpath = /var/log/auth.log
        /var/log/secure
        /var/log/sshd.log
 maxretry = 3
-bantime = 86400  # 24 hours"
-
-  execute_cmd "sudo tee /etc/fail2ban/jail.local > /dev/null << 'EOF'
-$fail2ban_config
-EOF"
+bantime = 86400  # 24 hours
+EOF
 
   # Make sure necessary directories exist
-  execute_cmd "sudo mkdir -p /var/run/fail2ban"
-  execute_cmd "sudo chmod 755 /var/run/fail2ban"
+  sudo mkdir -p /var/run/fail2ban
+  sudo chmod 755 /var/run/fail2ban
 
   # Remove socket if it exists
-  if [ -S "/var/run/fail2ban/fail2ban.sock" ] && [ "$DRY_RUN" = false ]; then
-    execute_cmd "sudo rm -f /var/run/fail2ban/fail2ban.sock"
+  if [ -S /var/run/fail2ban/fail2ban.sock ]; then
+    sudo rm -f /var/run/fail2ban/fail2ban.sock
   fi
 
   # Check if the sshd filter exists
-  if [ ! -f "/etc/fail2ban/filter.d/sshd.conf" ] || [ "$DRY_RUN" = true ]; then
+  if [ ! -f "/etc/fail2ban/filter.d/sshd.conf" ]; then
     print_warning "SSH filter not found. Creating a basic one..."
-    execute_cmd "sudo mkdir -p /etc/fail2ban/filter.d"
-    
-    local sshd_filter="[Definition]
+    sudo mkdir -p /etc/fail2ban/filter.d
+    sudo tee "/etc/fail2ban/filter.d/sshd.conf" > /dev/null << EOF
+[Definition]
 failregex = ^%(__prefix_line)s(?:error: PAM: )?Authentication failure for .* from <HOST>( via \S+)?\s*$
           ^%(__prefix_line)s(?:error: PAM: )?User not known to the underlying authentication module for .* from <HOST>\s*$
-          ^%(__prefix_line)sFailed \S+ for invalid user .* from <HOST>(?: port \d+)?(?: ssh\d*)?(: (ruser .*|(\S+ ID \S+ \$serial \d+\$ CA )?\S+ %(__md5hex)s(, client user \".*\", client host \".*\")?))?\s*$
-          ^%(__prefix_line)sFailed \S+ for .* from <HOST>(?: port \d+)?(?: ssh\d*)?(: (ruser .*|(\S+ ID \S+ \$serial \d+\$ CA )?\S+ %(__md5hex)s(, client user \".*\", client host \".*\")?))?\s*$
+          ^%(__prefix_line)sFailed \S+ for invalid user .* from <HOST>(?: port \d+)?(?: ssh\d*)?(: (ruser .*|(\S+ ID \S+ \$serial \d+\$ CA )?\S+ %(__md5hex)s(, client user ".*", client host ".*")?))?\s*$
+          ^%(__prefix_line)sFailed \S+ for .* from <HOST>(?: port \d+)?(?: ssh\d*)?(: (ruser .*|(\S+ ID \S+ \$serial \d+\$ CA )?\S+ %(__md5hex)s(, client user ".*", client host ".*")?))?\s*$
           ^%(__prefix_line)sROOT LOGIN REFUSED.* FROM <HOST>\s*$
           ^%(__prefix_line)s[iI](?:llegal|nvalid) user .* from <HOST>\s*$
           ^%(__prefix_line)sUser .+ from <HOST> not allowed because not listed in AllowUsers\s*$
@@ -987,71 +695,59 @@ failregex = ^%(__prefix_line)s(?:error: PAM: )?Authentication failure for .* fro
 
 ignoreregex = 
 
-# \"maxlines\" is number of log lines to buffer for multi-line regex searches
-maxlines = 10"
-
-    execute_cmd "sudo tee /etc/fail2ban/filter.d/sshd.conf > /dev/null << 'EOF'
-$sshd_filter
-EOF"
+# "maxlines" is number of log lines to buffer for multi-line regex searches
+maxlines = 10
+EOF
   fi
 
   # Restart the service
   print_message "$COLOR_INFO" "Starting Fail2Ban service..."
-  if ! execute_cmd "sudo systemctl restart fail2ban"; then
+  if ! sudo systemctl restart fail2ban; then
     print_warning "Failed to start Fail2Ban. Checking for errors..."
     
     # Show errors
-    if [ "$DRY_RUN" = false ]; then
-      execute_cmd "sudo journalctl -u fail2ban --no-pager -n 20"
-    fi
+    sudo journalctl -u fail2ban --no-pager -n 20
     
     # Try a more minimal configuration without log file dependencies
     print_message "$COLOR_INFO" "Trying minimal configuration without log file dependencies..."
-    
-    local minimal_config="[DEFAULT]
+    sudo tee "/etc/fail2ban/jail.local" > /dev/null << EOF
+[DEFAULT]
 banaction = iptables-multiport
 bantime = 3600
 findtime = 600
-maxretry = 5"
-
-    execute_cmd "sudo tee /etc/fail2ban/jail.local > /dev/null << 'EOF'
-$minimal_config
-EOF"
+maxretry = 5
+EOF
     
     # Try to restart again
-    if ! execute_cmd "sudo systemctl restart fail2ban"; then
+    if ! sudo systemctl restart fail2ban; then
       print_warning "Fail2Ban could not be started. Security will be reduced."
       print_message "$COLOR_INFO" "You can manually configure Fail2Ban later with:"
       print_message "$COLOR_INFO" "  sudo apt-get install --reinstall fail2ban"
       print_message "$COLOR_INFO" "  sudo systemctl restart fail2ban"
       
       # Disable Fail2Ban to avoid future errors
-      execute_cmd "sudo systemctl disable fail2ban"
+      sudo systemctl disable fail2ban
       return
     fi
   fi
 
   # Check if the service is active
-  if [ "$DRY_RUN" = false ]; then
-    if systemctl is-active --quiet fail2ban; then
-      print_success "Fail2Ban is active and configured"
-      
-      # Make sure Fail2Ban starts at boot
-      execute_cmd "sudo systemctl enable fail2ban"
-    else
-      print_warning "Fail2Ban service is not running. Security will be reduced."
-      print_message "$COLOR_INFO" "You can try to fix it manually later with:"
-      print_message "$COLOR_INFO" "  sudo apt-get install --reinstall fail2ban"
-      print_message "$COLOR_INFO" "  sudo systemctl restart fail2ban"
-    fi
+  if systemctl is-active --quiet fail2ban; then
+    print_success "Fail2Ban is active and configured"
+    
+    # Make sure Fail2Ban starts at boot
+    sudo systemctl enable fail2ban
   else
-    print_success "Fail2Ban would be configured"
+    print_warning "Fail2Ban service is not running. Security will be reduced."
+    print_message "$COLOR_INFO" "You can try to fix it manually later with:"
+    print_message "$COLOR_INFO" "  sudo apt-get install --reinstall fail2ban"
+    print_message "$COLOR_INFO" "  sudo systemctl restart fail2ban"
   fi
 }
 
 # Configure SSH security
 configure_ssh_security() {
-  print_section "10" "15" "Configuring SSH security"
+  print_section "9" "12" "Configuring SSH security"
 
   if [ "$SETUP_SSH" != true ]; then
     print_message "$COLOR_INFO" "Skipping SSH configuration (--no-ssh flag provided)"
@@ -1063,10 +759,11 @@ configure_ssh_security() {
   print_message "$COLOR_INFO" "Configuring SSH..."
 
   # Create a backup of the original config
-  execute_cmd "sudo cp $ssh_config $ssh_config.bak"
+  sudo cp "$ssh_config" "$ssh_config.bak"
 
   # Update SSH configuration
-  local ssh_config_content="# SSH Server Configuration
+  sudo tee "$ssh_config" > /dev/null << EOF
+# SSH Server Configuration
 Port $SSH_PORT
 Protocol 2
 
@@ -1097,23 +794,18 @@ LogLevel VERBOSE
 AllowUsers $SETUP_USER
 
 # Include other configuration files
-Include /etc/ssh/sshd_config.d/*.conf"
-
-  execute_cmd "sudo tee $ssh_config > /dev/null << 'EOF'
-$ssh_config_content
-EOF"
+Include /etc/ssh/sshd_config.d/*.conf
+EOF
 
   print_message "$COLOR_INFO" "Restarting SSH service..."
-  execute_cmd "sudo systemctl restart sshd"
+  sudo systemctl restart sshd
 
   print_success "SSH configured"
 
   # Only show password message if a new user was created
   if [ "$ALLOW_PASSWORD_AUTH" = true ] && [ "$USER_CREATED" = true ]; then
     print_message "$COLOR_INFO" "SSH password authentication is enabled"
-    if [ "$DRY_RUN" = false ]; then
-      print_warning "Remember to change the password for $SETUP_USER after login."
-    fi
+    print_warning "Default password for $SETUP_USER is 'ignis123'. Please change it after login."
   elif [ "$ALLOW_PASSWORD_AUTH" = false ]; then
     print_warning "SSH now only allows public key authentication on port $SSH_PORT"
     print_warning "Make sure you have added your SSH key before logging out"
@@ -1124,14 +816,14 @@ EOF"
 
 # Install Docker
 install_docker() {
-  print_section "11" "15" "Installing Docker"
+  print_section "10" "12" "Installing Docker"
 
   if [ "$SETUP_DOCKER" != true ]; then
     print_message "$COLOR_INFO" "Skipping Docker installation (--no-docker flag provided)"
     return
   fi
 
-  if command_exists docker && command_exists docker-compose && [ "$DRY_RUN" = false ]; then
+  if command_exists docker && command_exists docker-compose; then
     print_success "Docker is already installed"
     return
   fi
@@ -1139,28 +831,31 @@ install_docker() {
   print_message "$COLOR_INFO" "Installing Docker..."
 
   # Install Docker prerequisites
-  execute_cmd "sudo apt install -y -o Dir::Cache::Archives=$CACHE_DIR ca-certificates gnupg lsb-release"
+  sudo apt install -y \
+    ca-certificates \
+    gnupg \
+    lsb-release
 
   # Add Docker's official GPG key
-  execute_cmd "sudo install -m 0755 -d /etc/apt/keyrings"
-  execute_cmd "curl -fsSL https://download.docker.com/linux/debian/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg"
-  execute_cmd "sudo chmod a+r /etc/apt/keyrings/docker.gpg"
+  sudo install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL https://download.docker.com/linux/debian/gpg | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
 
   # Add Docker repository
-  local docker_repo="deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable"
-  execute_cmd "echo \"$docker_repo\" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null"
+  echo \
+    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+    https://download.docker.com/linux/debian \
+    $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
 
   # Install Docker
-  execute_cmd "sudo apt update -y"
-  execute_cmd "sudo apt install -y -o Dir::Cache::Archives=$CACHE_DIR docker-ce docker-ce-cli containerd.io docker-compose-plugin docker-compose"
+  sudo apt update -y
+  sudo apt install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin docker-compose
 
   # Add user to docker group
-  execute_cmd "sudo usermod -aG docker $SETUP_USER"
+  sudo usermod -aG docker "$SETUP_USER"
 
   # Configure Docker daemon
-  execute_cmd "sudo mkdir -p /etc/docker"
-  
-  local docker_daemon_config='{
+  sudo mkdir -p /etc/docker
+  echo '{
   "log-driver": "json-file",
   "log-opts": {
     "max-size": "10m",
@@ -1170,27 +865,25 @@ install_docker() {
     "buildkit": true
   },
   "experimental": false
-}'
-
-  execute_cmd "echo '$docker_daemon_config' | sudo tee /etc/docker/daemon.json > /dev/null"
+}' | sudo tee /etc/docker/daemon.json > /dev/null
 
   # Configure Docker to host communication
   # Add host.docker.internal DNS entry to /etc/hosts if not already present
-  if ! grep -q "host.docker.internal" /etc/hosts && [ "$DRY_RUN" = false ]; then
+  if ! grep -q "host.docker.internal" /etc/hosts; then
     print_message "$COLOR_INFO" "Adding host.docker.internal to /etc/hosts..."
-    execute_cmd "echo '172.17.0.1 host.docker.internal' | sudo tee -a /etc/hosts > /dev/null"
+    echo "172.17.0.1 host.docker.internal" | sudo tee -a /etc/hosts > /dev/null
   fi
 
   # Ensure Docker starts on boot
-  execute_cmd "sudo systemctl enable docker"
-  execute_cmd "sudo systemctl restart docker"
+  sudo systemctl enable docker
+  sudo systemctl restart docker
 
   print_success "Docker installed"
   print_warning "Docker group permissions require a session restart to take effect"
   print_message "$COLOR_INFO" "To use Docker in the current session without logging out, run: newgrp docker"
 
   # Fix permissions for the current session if running as the target user
-  if [ "$(whoami)" = "$SETUP_USER" ] && [ "$DRY_RUN" = false ]; then
+  if [ "$(whoami)" = "$SETUP_USER" ]; then
     print_message "$COLOR_INFO" "Applying Docker group permissions to current session..."
     # Create a subshell with the new group
     sg docker -c "docker ps > /dev/null 2>&1"
@@ -1206,46 +899,38 @@ install_docker() {
 
 # Clone repository and set up project
 setup_project() {
-  print_section "12" "15" "Setting up Ignis project"
+  print_section "11" "12" "Setting up Ignis project"
 
   # Create installation directory if it doesn't exist
-  if [ ! -d "$INSTALLATION_DIR" ] || [ "$DRY_RUN" = true ]; then
-    execute_cmd "sudo mkdir -p $INSTALLATION_DIR"
-    execute_cmd "sudo chown $SETUP_USER:$SETUP_USER $INSTALLATION_DIR"
+  if [ ! -d "$INSTALLATION_DIR" ]; then
+    sudo mkdir -p "$INSTALLATION_DIR"
+    sudo chown "$SETUP_USER:$SETUP_USER" "$INSTALLATION_DIR"
   fi
 
   # Clone repository if requested
   if [ "$CLONE_REPO" = true ]; then
-    if [ ! -d "$INSTALLATION_DIR/.git" ] || [ "$DRY_RUN" = true ]; then
+    if [ ! -d "$INSTALLATION_DIR/.git" ]; then
       print_message "$COLOR_INFO" "Cloning repository from $GIT_REPO..."
       
       if [ "$(whoami)" = "$SETUP_USER" ]; then
         # Running as the target user
-        execute_cmd "git clone -b $GIT_BRANCH $GIT_REPO $INSTALLATION_DIR"
+        git clone -b "$GIT_BRANCH" "$GIT_REPO" "$INSTALLATION_DIR"
       else
         # Running as another user, use sudo to run commands as the target user
-        execute_cmd "sudo -u $SETUP_USER git clone -b $GIT_BRANCH $GIT_REPO $INSTALLATION_DIR"
+        sudo -u "$SETUP_USER" git clone -b "$GIT_BRANCH" "$GIT_REPO" "$INSTALLATION_DIR"
       fi
       
       print_success "Repository cloned successfully"
     else
       print_message "$COLOR_INFO" "Repository already exists, pulling latest changes..."
       
-      if [ "$DRY_RUN" = false ]; then
-        cd "$INSTALLATION_DIR" || {
-          print_error "Could not change to installation directory: $INSTALLATION_DIR"
-          exit 1
-        }
-        
-        if [ "$(whoami)" = "$SETUP_USER" ]; then
-          execute_cmd "git checkout $GIT_BRANCH"
-          execute_cmd "git pull"
-        else
-          execute_cmd "sudo -u $SETUP_USER git checkout $GIT_BRANCH"
-          execute_cmd "sudo -u $SETUP_USER git pull"
-        fi
+      cd "$INSTALLATION_DIR"
+      if [ "$(whoami)" = "$SETUP_USER" ]; then
+        git checkout "$GIT_BRANCH"
+        git pull
       else
-        print_message "$COLOR_INFO" "[DRY RUN] Would update repository in $INSTALLATION_DIR" 1
+        sudo -u "$SETUP_USER" git checkout "$GIT_BRANCH"
+        sudo -u "$SETUP_USER" git pull
       fi
       
       print_success "Repository updated"
@@ -1255,60 +940,49 @@ setup_project() {
   fi
 
   # Create required directories
-  execute_cmd "mkdir -p $INSTALLATION_DIR/logs/webhook"
-  execute_cmd "mkdir -p $INSTALLATION_DIR/logs/deployments"
-  execute_cmd "mkdir -p $INSTALLATION_DIR/logs/certs"
-  execute_cmd "mkdir -p $INSTALLATION_DIR/proxy/certs"
-  execute_cmd "mkdir -p $INSTALLATION_DIR/proxy/dynamic"
-  execute_cmd "mkdir -p $INSTALLATION_DIR/deployments/service"
+  mkdir -p "$INSTALLATION_DIR/logs/webhook"
+  mkdir -p "$INSTALLATION_DIR/logs/deployments"
+  mkdir -p "$INSTALLATION_DIR/logs/certs"
+  mkdir -p "$INSTALLATION_DIR/proxy/certs"
+  mkdir -p "$INSTALLATION_DIR/proxy/dynamic"
+  mkdir -p "$INSTALLATION_DIR/deployments/service"
   
   # Create acme.json file if it doesn't exist
-  if [ ! -e "$INSTALLATION_DIR/proxy/acme.json" ] || [ "$DRY_RUN" = true ]; then
+  if [ ! -e "$INSTALLATION_DIR/proxy/acme.json" ]; then
     print_message "$COLOR_INFO" "Creating acme.json file for Let's Encrypt certificates..."
     # Ensure it's created as a file, not a directory
-    execute_cmd "touch $INSTALLATION_DIR/proxy/acme.json"
-    execute_cmd "chmod 600 $INSTALLATION_DIR/proxy/acme.json"
+    touch "$INSTALLATION_DIR/proxy/acme.json"
+    chmod 600 "$INSTALLATION_DIR/proxy/acme.json"
     print_success "Created acme.json file with proper permissions"
-  elif [ -d "$INSTALLATION_DIR/proxy/acme.json" ] && [ "$DRY_RUN" = false ]; then
+  elif [ -d "$INSTALLATION_DIR/proxy/acme.json" ]; then
     # If it exists as a directory, fix it
     print_warning "acme.json exists as a directory instead of a file, fixing..."
-    execute_cmd "rm -rf $INSTALLATION_DIR/proxy/acme.json"
-    execute_cmd "touch $INSTALLATION_DIR/proxy/acme.json"
-    execute_cmd "chmod 600 $INSTALLATION_DIR/proxy/acme.json"
+    rm -rf "$INSTALLATION_DIR/proxy/acme.json"
+    touch "$INSTALLATION_DIR/proxy/acme.json"
+    chmod 600 "$INSTALLATION_DIR/proxy/acme.json"
     print_success "Fixed acme.json (converted from directory to file)"
   fi
 
   # Create .env file if it doesn't exist
-  if [ ! -f "$INSTALLATION_DIR/.env" ] || [ "$DRY_RUN" = true ]; then
+  if [ ! -f "$INSTALLATION_DIR/.env" ]; then
     print_message "$COLOR_INFO" "Creating template .env file..."
-    
-    # Generate a secure webhook secret
-    local webhook_secret
-    if [ "$DRY_RUN" = false ]; then
-      webhook_secret=$(openssl rand -hex 16)
-    else
-      webhook_secret="ignis_webhook_secret_PLACEHOLDER"
-    fi
-    
-    local env_content="WEBHOOK_SECRET=$webhook_secret
-ENVIRONMENT=production
-WEBHOOK_PORT=3333
-WEBHOOK_HOST=0.0.0.0"
-
-    execute_cmd "echo '$env_content' > $INSTALLATION_DIR/.env"
+    echo "WEBHOOK_SECRET=ignis_webhook_secret_$(date +%s | sha256sum | base64 | head -c 32)" > "$INSTALLATION_DIR/.env"
+    echo "ENVIRONMENT=production" >> "$INSTALLATION_DIR/.env"
+    echo "WEBHOOK_PORT=3333" >> "$INSTALLATION_DIR/.env"
+    echo "WEBHOOK_HOST=0.0.0.0" >> "$INSTALLATION_DIR/.env"
     print_success "Created .env file with a random WEBHOOK_SECRET"
   fi
 
   # Set proper permissions
-  execute_cmd "sudo chown -R $SETUP_USER:$SETUP_USER $INSTALLATION_DIR"
+  sudo chown -R "$SETUP_USER:$SETUP_USER" "$INSTALLATION_DIR"
 
   # Make sure script directories exist and have proper permissions
-  if [ -d "$INSTALLATION_DIR/scripts" ] || [ "$DRY_RUN" = true ]; then
-    execute_cmd "sudo chmod -R 755 $INSTALLATION_DIR/scripts"
+  if [ -d "$INSTALLATION_DIR/scripts" ]; then
+    sudo chmod -R 755 "$INSTALLATION_DIR/scripts"
   fi
 
-  if [ -d "$INSTALLATION_DIR/deployments/scripts" ] || [ "$DRY_RUN" = true ]; then
-    execute_cmd "sudo chmod -R 755 $INSTALLATION_DIR/deployments/scripts"
+  if [ -d "$INSTALLATION_DIR/deployments/scripts" ]; then
+    sudo chmod -R 755 "$INSTALLATION_DIR/deployments/scripts"
   fi
 
   print_success "Ignis project setup completed"
@@ -1316,7 +990,7 @@ WEBHOOK_HOST=0.0.0.0"
 
 # Install and configure services
 install_services() {
-  print_section "13" "15" "Installing and configuring services"
+  print_section "12" "12" "Installing and configuring services"
 
   if [ "$INSTALL_SERVICES" != true ]; then
     print_message "$COLOR_INFO" "Skipping service installation (--no-install-services flag provided)"
@@ -1326,55 +1000,37 @@ install_services() {
   # Find all service files
   local service_dir="$INSTALLATION_DIR/deployments/service"
   
-  if [ -d "$service_dir" ] || [ "$DRY_RUN" = true ]; then
+  if [ -d "$service_dir" ]; then
     print_message "$COLOR_INFO" "Installing systemd services..."
     
     # Process each service file
-    if [ "$DRY_RUN" = false ]; then
-      find "$service_dir" -name "*.service" -type f | while read -r src; do
-        local service_name
-        service_name=$(basename "$src" .service)
-        local dst="/etc/systemd/system/${service_name}.service"
-        
-        print_message "$COLOR_INFO" "Installing service: $service_name" 2
-        execute_cmd "sudo cp $src $dst"
-        execute_cmd "sudo systemctl daemon-reload"
-        execute_cmd "sudo systemctl enable $service_name"
-        
-        # Verify NoNewPrivileges is set
-        if grep -q "NoNewPrivileges=" "$src"; then
-          print_success "Service $service_name has NoNewPrivileges set" 2
-        else
-          print_warning "Service $service_name does not have NoNewPrivileges set" 2
-          print_message "$COLOR_INFO" "Consider adding 'NoNewPrivileges=true' to the [Service] section" 2
-        fi
-      done
-    else
-      print_message "$COLOR_INFO" "[DRY RUN] Would install systemd services from $service_dir" 1
-    fi
+    find "$service_dir" -name "*.service" -type f | while read -r src; do
+      local service_name
+      service_name=$(basename "$src" .service)
+      local dst="/etc/systemd/system/${service_name}.service"
+      
+      print_message "$COLOR_INFO" "Installing service: $service_name"
+      sudo cp "$src" "$dst"
+      sudo systemctl daemon-reload
+      sudo systemctl enable "$service_name"
+    done
     
     # Start services if requested
     if [ "$START_SERVICES" = true ]; then
       print_message "$COLOR_INFO" "Starting services..."
       
       # Start ignis-startup service which should handle other services
-      if [ "$DRY_RUN" = false ] && systemctl list-unit-files | grep -q "ignis-startup.service"; then
-        execute_cmd "sudo systemctl start ignis-startup.service"
+      if systemctl list-unit-files | grep -q "ignis-startup.service"; then
+        sudo systemctl start ignis-startup.service
         print_success "Started ignis-startup service"
-      elif [ "$DRY_RUN" = true ]; then
-        print_message "$COLOR_INFO" "[DRY RUN] Would start ignis-startup service" 1
       else
         # Start each service individually if ignis-startup doesn't exist
-        if [ "$DRY_RUN" = false ]; then
-          find "$service_dir" -name "*.service" -type f | while read -r src; do
-            local service_name
-            service_name=$(basename "$src" .service)
-            print_message "$COLOR_INFO" "Starting service: $service_name" 2
-            execute_cmd "sudo systemctl start $service_name"
-          done
-        else
-          print_message "$COLOR_INFO" "[DRY RUN] Would start individual services" 1
-        fi
+        find "$service_dir" -name "*.service" -type f | while read -r src; do
+          local service_name
+          service_name=$(basename "$src" .service)
+          print_message "$COLOR_INFO" "Starting service: $service_name"
+          sudo systemctl start "$service_name"
+        done
       fi
     else
       print_message "$COLOR_INFO" "Skipping service startup (--no-start-services flag provided)"
@@ -1387,200 +1043,70 @@ install_services() {
   print_success "Services installed and configured"
 }
 
-# Configure permissions
-configure_permissions() {
-  print_section "14" "15" "Configuring permissions"
-
-  print_message "$COLOR_INFO" "Setting up file permissions..."
-
-  # Set proper permissions for log directories
-  execute_cmd "sudo chown -R $SETUP_USER:$SETUP_USER $INSTALLATION_DIR/logs"
-  execute_cmd "sudo chmod -R 775 $INSTALLATION_DIR/logs"
-
-  # Set proper permissions for proxy directories
-  execute_cmd "sudo chown -R $SETUP_USER:$SETUP_USER $INSTALLATION_DIR/proxy"
-  execute_cmd "sudo chmod -R 775 $INSTALLATION_DIR/proxy"
-
-  # Set proper permissions for deployments directories
-  execute_cmd "sudo chown -R $SETUP_USER:$SETUP_USER $INSTALLATION_DIR/deployments"
-  execute_cmd "sudo chmod -R 775 $INSTALLATION_DIR/deployments"
-
-  # Set proper permissions for acme.json
-  execute_cmd "sudo chown $SETUP_USER:$SETUP_USER $INSTALLATION_DIR/proxy/acme.json"
-  execute_cmd "sudo chmod 600 $INSTALLATION_DIR/proxy/acme.json"
-
-  # Set proper permissions for .env file
-  execute_cmd "sudo chown $SETUP_USER:$SETUP_USER $INSTALLATION_DIR/.env"
-  execute_cmd "sudo chmod 600 $INSTALLATION_DIR/.env"
-  
-  # Configure Docker socket permissions
-  if [ -S "/var/run/docker.sock" ] || [ "$DRY_RUN" = true ]; then
-    print_message "$COLOR_INFO" "Configuring Docker socket permissions..."
-    execute_cmd "sudo chmod 666 /var/run/docker.sock || sudo chmod 660 /var/run/docker.sock"
-    
-    # Add user to docker group if not already
-    if ! groups "$SETUP_USER" | grep -q docker && [ "$DRY_RUN" = false ]; then
-      print_message "$COLOR_INFO" "Adding $SETUP_USER to docker group..."
-      execute_cmd "sudo usermod -aG docker $SETUP_USER"
-      print_warning "You'll need to log out and back in for the group changes to take effect."
-    elif [ "$DRY_RUN" = true ]; then
-      print_message "$COLOR_INFO" "[DRY RUN] Would add $SETUP_USER to docker group" 1
-    fi
-  fi
-
-  print_success "File permissions and Docker setup completed"
-}
-
-# Uninstall Ignis
-uninstall_ignis() {
-  print_section "1" "1" "Uninstalling Ignis"
-
-  if [ "$UNINSTALL" != true ]; then
-    print_error "Uninstall flag not set. Use --uninstall to confirm uninstallation."
-    exit 1
-  fi
-
-  print_warning "This will remove all Ignis files, services, and configurations."
-  print_warning "This action cannot be undone."
-  
-  if [ "$DRY_RUN" = false ]; then
-    # Prompt for confirmation
-    read -p "Are you sure you want to uninstall Ignis? (y/N) " -n 1 -r
-    echo
-    if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-      print_error "Uninstallation cancelled."
-      exit 1
-    fi
-    
-    print_message "$COLOR_INFO" "Stopping Ignis services..."
-    # Find and stop all Ignis services
-    systemctl list-units --type=service --all | grep "ignis" | awk '{print $1}' | while read -r service; do
-      execute_cmd "sudo systemctl stop $service"
-      execute_cmd "sudo systemctl disable $service"
-      execute_cmd "sudo rm -f /etc/systemd/system/$service"
-    done
-    execute_cmd "sudo systemctl daemon-reload"
-    
-    # Remove installation directory
-    print_message "$COLOR_INFO" "Removing Ignis installation directory..."
-    execute_cmd "sudo rm -rf $INSTALLATION_DIR"
-    
-    # Remove user if created by this script
-    if [ "$USER_CREATED" = true ]; then
-      print_message "$COLOR_INFO" "Removing user $SETUP_USER..."
-      execute_cmd "sudo userdel -r $SETUP_USER"
-    fi
-    
-    # Remove Docker containers related to Ignis
-    if command_exists docker; then
-      print_message "$COLOR_INFO" "Removing Docker containers related to Ignis..."
-      docker ps -a | grep "ignis" | awk '{print $1}' | while read -r container; do
-        execute_cmd "sudo docker stop $container"
-        execute_cmd "sudo docker rm $container"
-      done
-      
-      # Remove Docker images related to Ignis
-      print_message "$COLOR_INFO" "Removing Docker images related to Ignis..."
-      docker images | grep "ignis" | awk '{print $3}' | while read -r image; do
-        execute_cmd "sudo docker rmi $image"
-      done
-    fi
-    
-    # Remove cache directory
-    if [ -d "$CACHE_DIR" ]; then
-      print_message "$COLOR_INFO" "Removing cache directory..."
-      execute_cmd "sudo rm -rf $CACHE_DIR"
-    fi
-    
-    print_success "Ignis has been uninstalled successfully."
-  else
-    print_message "$COLOR_INFO" "[DRY RUN] Would uninstall Ignis from $INSTALLATION_DIR" 1
-    print_message "$COLOR_INFO" "[DRY RUN] Would stop and remove all Ignis services" 1
-    print_message "$COLOR_INFO" "[DRY RUN] Would remove Docker containers and images related to Ignis" 1
-  fi
-  
-  exit 0
-}
-
 # Generate system summary
 generate_summary() {
-  print_section "15" "15" "Generating system summary"
-  
   print_message "$COLOR_TITLE" "=== IGNIS SYSTEM SUMMARY ==="
 
   # Check versions
   echo -e "${COLOR_INFO}Software Versions:${COLOR_RESET}"
-  if [ "$DRY_RUN" = false ]; then
-    if command_exists node; then
-      echo -e "  Node.js: $(node -v)"
-    else
-      echo -e "  Node.js: Not installed"
-    fi
-
-    if command_exists npm; then
-      echo -e "  NPM: $(npm -v)"
-    else
-      echo -e "  NPM: Not installed"
-    fi
-
-    if command_exists bun; then
-      echo -e "  Bun: $(bun --version)"
-    else
-      echo -e "  Bun: Not installed"
-    fi
-
-    if command_exists docker; then
-      echo -e "  Docker: $(docker --version)"
-    else
-      echo -e "  Docker: Not installed"
-    fi
-
-    if command_exists java; then
-      echo -e "  Java: $(java -version 2>&1 | head -n 1)"
-    else
-      echo -e "  Java: Not installed"
-    fi
+  if command_exists node; then
+    echo -e "  Node.js: $(node -v)"
   else
-    echo -e "  [DRY RUN] Would check installed software versions"
+    echo -e "  Node.js: Not installed"
+  fi
+
+  if command_exists npm; then
+    echo -e "  NPM: $(npm -v)"
+  else
+    echo -e "  NPM: Not installed"
+  fi
+
+  if command_exists bun; then
+    echo -e "  Bun: $(bun --version)"
+  else
+    echo -e "  Bun: Not installed"
+  fi
+
+  if command_exists docker; then
+    echo -e "  Docker: $(docker --version)"
+  else
+    echo -e "  Docker: Not installed"
+  fi
+
+  if command_exists java; then
+    echo -e "  Java: $(java -version 2>&1 | head -n 1)"
+  else
+    echo -e "  Java: Not installed"
   fi
 
   # Check services
   echo -e "${COLOR_INFO}Services Status:${COLOR_RESET}"
-  if [ "$DRY_RUN" = false ]; then
-    echo -e "  Docker: $(systemctl is-active docker 2>/dev/null || echo "not installed")"
-    
-    # Check installed Ignis services
-    if [ -d "/etc/systemd/system" ]; then
-      echo -e "  Ignis Services:"
-      systemctl list-units --type=service --all | grep "ignis" | while read -r line; do
-        echo -e "    $line"
-      done
-    fi
-  else
-    echo -e "  [DRY RUN] Would check service status"
+  echo -e "  Docker: $(systemctl is-active docker 2>/dev/null || echo "not installed")"
+  
+  # Check installed Ignis services
+  if [ -d "/etc/systemd/system" ]; then
+    echo -e "  Ignis Services:"
+    systemctl list-units --type=service --all | grep "ignis" | while read -r line; do
+      echo -e "    $line"
+    done
   fi
 
   # Check Fail2Ban status
-  if [ "$SETUP_FAIL2BAN" = true ] && [ "$DRY_RUN" = false ]; then
+  if [ "$SETUP_FAIL2BAN" = true ]; then
     if systemctl is-active fail2ban.service >/dev/null 2>&1; then
       echo -e "  Fail2Ban: active"
     else
       echo -e "  Fail2Ban: inactive (optional security feature)"
     fi
-  elif [ "$SETUP_FAIL2BAN" = true ]; then
-    echo -e "  Fail2Ban: would be configured"
   else
     echo -e "  Fail2Ban: not configured (optional security feature)"
   fi
 
   # Check firewall status
-  if [ "$USE_IPTABLES" = true ] && [ "$DRY_RUN" = false ]; then
+  if [ "$USE_IPTABLES" = true ]; then
     echo -e "${COLOR_INFO}Firewall Status (iptables):${COLOR_RESET}"
     sudo iptables -L -n | grep -E "Chain|ACCEPT|DROP" | head -n 10
-  elif [ "$USE_IPTABLES" = true ]; then
-    echo -e "${COLOR_INFO}Firewall Status (iptables):${COLOR_RESET}"
-    echo -e "  [DRY RUN] Would configure iptables firewall"
-  elif [ "$DRY_RUN" = false ]; then
+  else
     echo -e "${COLOR_INFO}Firewall Status (UFW):${COLOR_RESET}"
     if sudo ufw status | grep -q "Status: active"; then
       echo -e "  UFW: active"
@@ -1588,9 +1114,6 @@ generate_summary() {
     else
       echo -e "  UFW: inactive"
     fi
-  else
-    echo -e "${COLOR_INFO}Firewall Status (UFW):${COLOR_RESET}"
-    echo -e "  [DRY RUN] Would configure UFW firewall"
   fi
 
   # Installation details
@@ -1601,10 +1124,9 @@ generate_summary() {
   echo -e "  Password Authentication: $([ "$ALLOW_PASSWORD_AUTH" = true ] && echo "Enabled" || echo "Disabled")"
   echo -e "  TCP Forwarding: $([ "$ALLOW_TCP_FORWARDING" = true ] && echo "Enabled" || echo "Disabled")"
   echo -e "  Logging to File: $([ "$LOG_TO_FILE" = true ] && echo "Enabled ($LOG_FILE)" || echo "Disabled")"
-  echo -e "  Dry Run Mode: $([ "$DRY_RUN" = true ] && echo "Enabled" || echo "Disabled")"
 
   # Docker permissions reminder
-  if command_exists docker || [ "$DRY_RUN" = true ]; then
+  if command_exists docker; then
     echo -e "${COLOR_WARNING}Docker Permissions:${COLOR_RESET}"
     echo -e "  If you encounter 'permission denied' errors with Docker commands, run:"
     echo -e "  $ newgrp docker"
@@ -1613,9 +1135,9 @@ generate_summary() {
 
   # Next steps
   echo -e "${COLOR_WARNING}Next Steps:${COLOR_RESET}"
-  if [ "$ALLOW_PASSWORD_AUTH" = true ] && [ "$USER_CREATED" = true ] && [ "$DRY_RUN" = false ]; then
+  if [ "$ALLOW_PASSWORD_AUTH" = true ] && [ "$USER_CREATED" = true ]; then
     echo -e "  1. SSH access command: ssh $SETUP_USER@your-server -p $SSH_PORT"
-    echo -e "  2. Change the default password immediately after login"
+    echo -e "  2. Default password: ignis123 (change it immediately after login)"
   elif [ "$ALLOW_PASSWORD_AUTH" = true ]; then
     echo -e "  1. SSH access command: ssh $SETUP_USER@your-server -p $SSH_PORT"
   else
@@ -1641,15 +1163,6 @@ main() {
   
   # Initialize log file if logging is enabled
   initialize_log_file
-  
-  # Handle uninstall mode
-  if [ "$UNINSTALL" = true ]; then
-    uninstall_ignis
-    exit 0
-  fi
-  
-  # Validate system requirements
-  validate_system_requirements
 
   # Run installation steps
   update_system
@@ -1664,7 +1177,6 @@ main() {
   install_docker
   setup_project
   install_services
-  configure_permissions
 
   # Generate summary
   generate_summary
